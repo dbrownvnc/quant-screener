@@ -4,9 +4,6 @@ import pandas as pd
 import pandas_ta as ta
 import datetime
 
-# yfinance 인증 문제 해결을 위한 코드 추가
-yf.pdr_override()
-
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Chart Screener", layout="wide")
 
