@@ -7,8 +7,8 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v3.6로 버전 업데이트
-st.title("📈 AI 퀀트 종목 발굴기 (v3.6 - 오류 메시지 개선)")
+# v3.7로 버전 업데이트
+st.title("📈 AI 퀀트 종목 발굴기 (v3.7 - 데이터 파싱 강화)")
 st.markdown(""" 
 **알고리즘 로직:**
 1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -16,7 +16,7 @@ st.markdown("""
 3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4. **리스크 관리:** 설정된 손절 라인 자동 계산
 ---
-**v3.6 변경점:** 분석 필수 데이터('close')가 없는 경우, 수신된 데이터 열을 명시하여 원인 파악이 용이하도록 오류 메시지를 대폭 개선했습니다.
+**v3.7 변경점:** yfinance가 반환하는 다양한 형태의 MultiIndex 데이터 구조를 지능적으로 파싱하도록 로직을 개선하여, 데이터 열 이름이 티커로 잘못 지정되는 문제를 해결했습니다.
 """)
 
 # --- 사이드바 설정 ---
@@ -119,8 +119,14 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
                 if debug_mode:
                     original_df = df.copy()
 
+                # ❗️ 핵심 수정: MultiIndex를 지능적으로 처리
                 if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(1)
+                    # 레벨 0과 레벨 1을 모두 확인하여 'open', 'close' 같은 키워드가 있는지 검사
+                    level0_cols = [str(col).lower() for col in df.columns.get_level_values(0)]
+                    if 'open' in level0_cols or 'close' in level0_cols:
+                        df.columns = df.columns.get_level_values(0)
+                    else:
+                        df.columns = df.columns.get_level_values(1)
 
                 df.columns = [str(col).lower() for col in df.columns]
 
@@ -129,7 +135,6 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
                 if len(df) < 200:
                     raise ValueError(f"데이터 부족 (200일 미만: {len(df)}일)")
                 
-                # ❗️ 핵심 수정: 오류 메시지에 사용 가능한 열 목록을 포함
                 if 'close' not in df.columns:
                     raise ValueError(f"필수 \'close\' 데이터가 없습니다. 사용 가능한 열: {list(df.columns)}")
 
