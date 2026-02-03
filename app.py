@@ -7,8 +7,8 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v3.5로 버전 업데이트
-st.title("📈 AI 퀀트 종목 발굴기 (v3.5 - 데이터 처리 로직 개선)")
+# v3.6로 버전 업데이트
+st.title("📈 AI 퀀트 종목 발굴기 (v3.6 - 오류 메시지 개선)")
 st.markdown(""" 
 **알고리즘 로직:**
 1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -16,7 +16,7 @@ st.markdown("""
 3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4. **리스크 관리:** 설정된 손절 라인 자동 계산
 ---
-**v3.5 변경점:** 데이터 열 이름을 표준화(소문자)하고 거래량 데이터가 없는 경우를 처리하여, 데이터 불일치로 인한 분석 오류를 해결했습니다.
+**v3.6 변경점:** 분석 필수 데이터('close')가 없는 경우, 수신된 데이터 열을 명시하여 원인 파악이 용이하도록 오류 메시지를 대폭 개선했습니다.
 """)
 
 # --- 사이드바 설정 ---
@@ -46,17 +46,15 @@ stop_loss_pct = st.sidebar.slider("손절가 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 debug_mode = st.sidebar.checkbox("상세 디버깅 모드")
 
 
-# --- 분석 함수 (안정성 대폭 강화) ---
+# --- 분석 함수 ---
 def analyze_dataframe(ticker, df, stop_loss_pct):
     try:
-        # 기술 지표 계산 (pandas-ta는 uppercase 컬럼을 생성)
         df.ta.sma(length=200, append=True)
         df.ta.rsi(length=14, append=True)
         df.ta.bbands(length=20, std=2, append=True)
 
         required_cols = ['SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0']
 
-        # 거래량 분석 (소문자 'volume' 컬럼이 있는 경우에만)
         if 'volume' in df.columns:
             df['volume_ma20'] = df['volume'].rolling(window=20).mean()
             required_cols.append('volume_ma20')
@@ -80,7 +78,7 @@ def analyze_dataframe(ticker, df, stop_loss_pct):
         
         trend = "상승" if close > ma200 else "하락"
         signal = "관망"
-        if close > ma200: 
+        if close > ma200:
             if close <= bb_lower and rsi < 35:
                 signal = "🔥 강력 매수"
             elif close <= bb_lower * 1.03 and rsi < 45:
@@ -94,6 +92,8 @@ def analyze_dataframe(ticker, df, stop_loss_pct):
             "티커": ticker, "신호": signal, "현재가": close,
             "추세": trend, "RSI": rsi, "거래량": volume_signal, "손절가": stop_price,
         }
+    except KeyError as e:
+        return {"티커": ticker, "신호": "오류", "오류 원인": f"분석에 필요한 열({e})을 찾을 수 없습니다."}
     except Exception as e:
         return {"티커": ticker, "신호": "오류", "오류 원인": f"분석 로직 오류: {str(e)}"}
 
@@ -122,15 +122,16 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(1)
 
-                # ❗️ 핵심 수정: 모든 열 이름을 소문자로 강제 변환
                 df.columns = [str(col).lower() for col in df.columns]
 
                 if df.empty:
                     raise ValueError("데이터 없음 (티커를 확인해주세요)")
                 if len(df) < 200:
                     raise ValueError(f"데이터 부족 (200일 미만: {len(df)}일)")
+                
+                # ❗️ 핵심 수정: 오류 메시지에 사용 가능한 열 목록을 포함
                 if 'close' not in df.columns:
-                    raise ValueError("필수 'Close' 데이터가 없습니다.")
+                    raise ValueError(f"필수 \'close\' 데이터가 없습니다. 사용 가능한 열: {list(df.columns)}")
 
                 progress_bar.progress((i + 1) / len(tickers), text=f"[{ticker}] 기술 지표 분석 중...")
                 analysis_result = analyze_dataframe(ticker, df.copy(), stop_loss_pct)
