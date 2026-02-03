@@ -7,46 +7,92 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v4.2로 버전 업데이트
-st.title("📈 AI 퀀트 종목 발굴기 (v4.2 - 최후의 안정화)")
+# v5.0: 관심종목 관리 기능 추가
+st.title("📈 AI 퀀트 종목 발굴기 (v5.0)")
 st.markdown("""
 **알고리즘 로직:**
-1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
-2. **거래량 필터:** 20일 평균 거래량 대비 현재 거래량의 급증 여부 확인
-3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
-4. **리스크 관리:** 설정된 손절 라인 자동 계산
+1.  **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
+2.  **거래량 필터:** 20일 평균 거래량 대비 현재 거래량의 급증 여부 확인
+3.  **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
+4.  **리스크 관리:** 설정된 손절 라인 자동 계산
 ---
-**v4.2 변경점:**
-1. **동적 컬럼 이름 감지:** 환경 문제로 인한 `pandas-ta` 라이브러리의 예측 불가능한 컬럼 이름 생성(`BBL_20_2.0`, `BBL_20_2`)에 대응하기 위해, `BBL`을 포함하는 컬럼을 동적으로 찾아 사용하는 비상 로직을 도입했습니다. 이는 어떠한 환경에서도 볼린저 밴드 하단 값을 참조할 수 있도록 보장하는 최후의 수단입니다.
+**v5.0 변경점:**
+1.  **관심종목 관리 기능:** 사이드바에서 직접 관심종목을 추가/삭제하고, '관심종목' 프리셋을 선택하여 바로 분석할 수 있습니다.
+2.  **v4.2 안정화 로직 유지:** `pandas-ta` 라이브러리의 컬럼 이름 변경에 대응하는 동적 컬럼 탐색 기능은 그대로 유지됩니다.
 """)
+
+# --- 세션 상태 초기화 ---
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = []
 
 # --- 사이드바 설정 ---
 st.sidebar.header("⚙️ 설정 (Settings)")
 market_choice = st.sidebar.radio("시장 선택", ('미국 증시 (US)', '한국 증시 (Korea)'), horizontal=True)
 
+# --- 관심종목 관리 UI ---
+st.sidebar.subheader("❤️ 관심종목 관리")
+new_ticker = st.sidebar.text_input("티커 추가", placeholder="예: NVDA, 005930").upper()
+
+if st.sidebar.button("➕ 추가"):
+    if new_ticker and new_ticker not in st.session_state.watchlist:
+        st.session_state.watchlist.append(new_ticker)
+        st.sidebar.success(f"'{new_ticker}'를 관심종목에 추가했습니다.")
+    elif new_ticker in st.session_state.watchlist:
+        st.sidebar.warning(f"'{new_ticker}'는 이미 목록에 있습니다.")
+    else:
+        st.sidebar.warning("추가할 티커를 입력해주세요.")
+
+# 관심종목 목록 표시 및 삭제 기능
+if st.session_state.watchlist:
+    st.sidebar.markdown("내 관심종목:")
+    # Use a loop that allows safe removal
+    for ticker_to_remove in st.session_state.watchlist[:]:
+        col1, col2 = st.sidebar.columns([0.8, 0.2])
+        with col1:
+            st.markdown(f"- {ticker_to_remove}")
+        with col2:
+            # Use a unique key for each button
+            if st.button(f"🗑️", key=f"del_{ticker_to_remove}", help=f"{ticker_to_remove} 삭제"):
+                st.session_state.watchlist.remove(ticker_to_remove)
+                st.rerun() # Re-run the script to update the UI immediately
+else:
+    st.sidebar.caption("추가된 관심종목이 없습니다.")
+
+st.sidebar.divider()
+
 # --- 종목 선택 UI ---
+watchlist_str = ", ".join(st.session_state.watchlist)
+
 if market_choice == '한국 증시 (Korea)':
     presets = {
-        "주요 기술주": "005930, 000660, 035420, 035720", "주요 자동차주": "005380, 000270",
+        "관심종목 (My Watchlist)": watchlist_str,
+        "주요 기술주": "005930, 000660, 035420, 035720",
+        "주요 자동차주": "005380, 000270",
         "주요 배터리주": "373220, 006400, 051910",
     }
     caption = "💡 종목 코드 입력 (예: 005930)"
-    preset_key = st.sidebar.selectbox("종목 프리셋", presets.keys())
-    tickers_input = st.sidebar.text_area("분석할 티커", presets[preset_key], height=100)
 else: # 미국 증시
     presets = {
-        "주요 기술주": "NVDA, AAPL, MSFT, GOOGL, AMD", "주요 성장주": "TSLA, PLTR, MSTR",
+        "관심종목 (My Watchlist)": watchlist_str,
+        "주요 기술주": "NVDA, AAPL, MSFT, GOOGL, AMD",
+        "주요 성장주": "TSLA, PLTR, MSTR",
         "주요 ETF": "SPY, QQQ, TQQQ",
     }
     caption = "💡 티커 입력 (예: NVDA, TSLA)"
-    preset_key = st.sidebar.selectbox("종목 프리셋", presets.keys())
-    tickers_input = st.sidebar.text_area("분석할 티커", presets[preset_key], height=100)
+
+# Make sure the default selection exists even if watchlist is empty
+preset_options = list(presets.keys())
+preset_key = st.sidebar.selectbox("종목 프리셋", preset_options)
+# The text_area's default value is now correctly keyed to the presets dictionary
+tickers_input = st.sidebar.text_area("분석할 티커", presets[preset_key], height=100)
+
 
 st.sidebar.caption(caption)
 stop_loss_pct = st.sidebar.slider("손절가 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 분석 함수 (v4.2 로직) ---
+# --- 분석 함수 (v4.2 로직 유지) ---
 def analyze_dataframe(ticker, df, stop_loss_pct):
+    # (The rest of the analysis function remains unchanged)
     try:
         df.ta.sma(length=200, append=True)
         df.ta.rsi(length=14, append=True)
