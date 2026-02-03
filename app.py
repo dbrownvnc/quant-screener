@@ -7,16 +7,16 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v3.10로 버전 업데이트
-st.title("📈 AI 퀀트 종목 발굴기 (v3.10 - 버그 수정)")
-st.markdown(""" 
+# v4.0으로 버전 업데이트
+st.title("📈 AI 퀀트 종목 발굴기 (v4.0 - 최종 안정화)")
+st.markdown("""
 **알고리즘 로직:**
 1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
 2. **거래량 필터:** 20일 평균 거래량 대비 현재 거래량의 급증 여부 확인
 3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4. **리스크 관리:** 설정된 손절 라인 자동 계산
 ---
-**v3.10 변경점:** 디버그 모드에서 발생하는 `SyntaxError` 버그를 수정했습니다.
+**v4.0 변경점:** '조용한 실패' 문제를 해결하기 위해, `pandas-ta` 라이브러리 사용 방식을 전면 재설계했습니다. 이제 모든 기술적 지표를 **'계산 -> 검증 -> 병합'**의 명확한 3단계로 처리하여, 지표 계산 실패 오류를 근본적으로 해결하고 분석 엔진의 안정성을 확보합니다.
 """)
 
 # --- 사이드바 설정 ---
@@ -46,36 +46,48 @@ stop_loss_pct = st.sidebar.slider("손절가 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 debug_mode = st.sidebar.checkbox("상세 디버깅 모드")
 
 
-# --- 분석 함수 ---
+# --- 분석 함수 (v4.0 로직) ---
 def analyze_dataframe(ticker, df, stop_loss_pct):
     try:
-        df.ta.sma(length=200, append=True)
-        df.ta.rsi(length=14, append=True)
-        df.ta.bbands(length=20, std=2, append=True)
+        # 1. 개별 지표 계산
+        sma200 = df.ta.sma(length=200)
+        rsi14 = df.ta.rsi(length=14)
+        bbands = df.ta.bbands(length=20, std=2)
 
-        required_indicators = ['SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0']
+        # 2. 지표 계산 결과 검증
+        if sma200 is None or rsi14 is None or bbands is None or bbands.empty:
+            missing = []
+            if sma200 is None: missing.append("SMA_200")
+            if rsi14 is None: missing.append("RSI_14")
+            if bbands is None or bbands.empty: missing.append("Bollinger Bands")
+            return {"티커": ticker, "신호": "오류", "오류 원인": f"핵심 지표 계산 실패: {', '.join(missing)}"}
+
+        # 3. 안전한 데이터 병합
+        df = pd.concat([df, sma200, rsi14, bbands], axis=1)
 
         if 'volume' in df.columns:
-            df['volume_ma20'] = df['volume'].rolling(window=20).mean()
-            required_indicators.append('volume_ma20')
-
-        missing_indicators = [col for col in required_indicators if col not in df.columns]
-        if missing_indicators:
-            return {"티커": ticker, "신호": "오류", "오류 원인": f"지표 계산 실패: {missing_indicators}"}
+            volume_ma20 = df['volume'].rolling(window=20).mean()
+            if volume_ma20 is not None:
+                df['volume_ma20'] = volume_ma20
 
         df.dropna(inplace=True)
         if df.empty:
             return {"티커": ticker, "신호": "오류", "오류 원인": "데이터 정제 후 비어있음"}
 
+        # 필요한 컬럼 최종 확인
+        required_cols = ['close', 'SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0']
+        if not all(col in df.columns for col in required_cols):
+             return {"티커": ticker, "신호": "오류", "오류 원인": f"병합 후 필수 열 부족. ({[c for c in required_cols if c not in df.columns]})"}
+
         latest = df.iloc[-1]
-        close, ma200, rsi, bb_lower, bb_upper = latest[['close', 'SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0']]
-        
+        close, ma200, rsi, bb_lower, bb_upper = latest[required_cols]
+
         volume_signal = "N/A"
-        if 'volume' in df.columns and 'volume_ma20' in latest and latest['volume_ma20'] > 0:
+        if 'volume_ma20' in latest and latest['volume_ma20'] > 0:
             vol = latest['volume']
             vol_avg = latest['volume_ma20']
             volume_signal = "급증" if vol > vol_avg * 1.5 else "보통"
-        
+
         trend = "상승" if close > ma200 else "하락"
         signal = "관망"
         if close > ma200:
@@ -92,8 +104,6 @@ def analyze_dataframe(ticker, df, stop_loss_pct):
             "티커": ticker, "신호": signal, "현재가": close,
             "추세": trend, "RSI": rsi, "거래량": volume_signal, "손절가": stop_price,
         }
-    except KeyError as e:
-        return {"티커": ticker, "신호": "오류", "오류 원인": f"분석에 필요한 열({e})을 찾을 수 없습니다."}
     except Exception as e:
         return {"티커": ticker, "신호": "오류", "오류 원인": f"분석 로직 오류: {str(e)}"}
 
@@ -107,12 +117,12 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
     else:
         ok_results, error_results = [], []
         error_dfs = {}
-        
+
         progress_bar = st.progress(0, text="분석 시작...")
 
         for i, ticker in enumerate(tickers):
             progress_bar.progress((i + 1) / len(tickers), text=f"[{ticker}] 데이터 다운로드 중...")
-            
+
             original_df = None
             try:
                 df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
@@ -145,10 +155,9 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
 
                 progress_bar.progress((i + 1) / len(tickers), text=f"[{ticker}] 기술 지표 분석 중...")
                 analysis_result = analyze_dataframe(ticker, df.copy(), stop_loss_pct)
-                
+
                 if analysis_result.get('신호') == '오류':
                     error_results.append(analysis_result)
-                    # ❗️ 핵심 수정 (v3.10): "is not in None" -> "is not None" 구문 오류 수정
                     if debug_mode and original_df is not None:
                         error_dfs[ticker] = original_df
                 else:
@@ -176,7 +185,7 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
             st.subheader("⚠️ 분석 실패 목록")
             error_df = pd.DataFrame(error_results)[['티커', '오류 원인']]
             st.dataframe(error_df, use_container_width=True, hide_index=True)
-            
+
             if debug_mode and error_dfs:
                 st.subheader("🐞 디버깅: 원본 데이터")
                 for ticker_key, df_val in error_dfs.items():
