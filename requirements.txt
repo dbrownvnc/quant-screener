@@ -1,6 +1,0 @@
-pandas
-yfinance
-pandas-ta
-streamlit
-requests
-matplotlib
