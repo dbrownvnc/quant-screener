@@ -9,8 +9,8 @@ import json
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v7.2: 종목명 표시 기능 추가
-st.title("📈 AI 퀀트 종목 발굴기 (v7.2)")
+# v7.3: 종목명 조회 로직 안정화
+st.title("📈 AI 퀀트 종목 발굴기 (v7.3)")
 st.markdown("""
 **알고리즘 로직:**
 1.  **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -18,21 +18,37 @@ st.markdown("""
 3.  **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4.  **리스크 관리:** ATR(변동성)을 기반으로 종목별 손절 라인 자동 계산
 ---
-**v7.2 변경점:**
-1.  **종목명 표시 기능:** 분석 결과에 티커와 함께 종목명을 표시하여 가독성을 높였습니다. (캐싱 적용)
-2.  **안정성 유지:** v7.1의 주도주 프리셋, 코스닥 자동 지원 기능은 그대로 유지됩니다.
+**v7.3 변경점:**
+1.  **종목명 조회 안정화:** `yfinance`의 `fast_info`를 우선 사용하고, 실패 시 기존 `info`로 재시도하는 2단계 로직을 적용하여 종목명을 더 빠르고 안정적으로 가져옵니다.
+2.  **안정성 유지:** 이전 버전의 모든 기능(프리셋, 코스닥 지원, ATR 손절 등)은 그대로 유지됩니다.
 """)
 
-# --- 종목명 가져오기 (캐싱 적용) ---
+# --- 종목명 가져오기 (v7.3 개선) ---
 @st.cache_data(ttl=86400) # 24시간 동안 캐시 유지
 def get_stock_name(ticker):
+    """
+    yfinance의 fast_info와 info를 순차적으로 사용하여 종목명을 가져옵니다.
+    1. stock.fast_info에서 'shortName'을 먼저 시도합니다. (가장 빠름)
+    2. 실패 시, stock.info에서 'shortName' 또는 'longName'을 시도합니다. (느리지만 정보가 많음)
+    3. 모든 시도가 실패하면 원본 티커를 반환합니다.
+    """
     try:
         stock = yf.Ticker(ticker)
+        
+        # 1차 시도: 빠르고 가벼운 fast_info 사용
+        name = stock.fast_info.get('shortName')
+        if name and name != ticker:
+            return name
+        
+        # 2차 시도: 더 많은 정보가 있는 info 사용
         info = stock.info
-        name = info.get('shortName') or info.get('longName') or ticker
-        return name
+        name = info.get('shortName') or info.get('longName')
+        if name and name != ticker:
+            return name
+            
+        return ticker # 모든 시도 실패 시 티커 반환
     except Exception:
-        return ticker # 에러 발생 시 티커 그대로 반환
+        return ticker # API 호출 중 예외 발생 시 티커 반환
 
 # --- jsonbin.io 및 Secrets 설정 ---
 api_key_names = ["JSONBIN_API_KEY", "jsonbin_api_key"]
@@ -111,7 +127,13 @@ if market_choice == '한국 증시 (Korea)':
         "관심종목 (Cloud)": watchlist_str,
         "💾 반도체 (삼성/하이닉스/HBM)": "005930,000660,042700,000020,028300,005290,005980,088800",
         "🔋 2차전지 & 에코프로 형제": "373220,006400,051910,003670,247540,086520,005070,066970",
-        # ... (rest of the presets are the same) ...
+        "💉 바이오 (비만/신약/CMO)": "207940,068270,000100,128940,196170,326030,214150,000250",
+        "🚗 자동차 & 부품": "005380,000270,012330,003550,009900,002980",
+        "🛡️ 방산 & 조선 (수출 주도)": "012450,064350,042660,005490,329180,010140,042670",
+        "💡 전력설비 & 원전": "267250,024110,000720,086280,034020,052690",
+        "💄 화장품 & 푸드 (K-수출)": "271560,192820,243070,097950,003230,280360",
+        "🏦 금융지주 & 밸류업": "105560,055550,086790,032830,316140,000810",
+        "📱 네카오 & 게임": "035420,035720,251270,036570,005940,293490"
     }
     caption = "💡 종목 코드 입력 (예: 005930, 247540)"
 else:
@@ -120,7 +142,13 @@ else:
         "👑 매그니피센트 7 (대장주)": "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA",
         "🤖 AI 반도체 & 하드웨어": "NVDA,AMD,AVGO,TSM,MU,INTC,QCOM,AMAT,LRCX,ARM,SMCI,DELL",
         "💾 AI 소프트웨어 & 보안": "PLTR,SNOW,CRWD,PANW,FTNT,ADBE,CRM,NOW,ORCL,IBM",
-        # ... (rest of the presets are the same) ...
+        "💊 비만치료제 & 바이오": "LLY,NVO,VRTX,REGN,AMGN,PFE,MRK,JNJ,UNH,ABBV",
+        "💰 비트코인 & 핀테크": "MSTR,COIN,HOOD,MARA,JPM,V,MA,BLK,PYPL,SQ",
+        "⚡ 전력 & 에너지 (AI데이터센터)": "VST,CEG,NRG,GE,ET,XOM,CVX,NEE",
+        "🚗 전기차 & 자율주행": "TSLA,RIVN,LCID,F,GM,UBER,LYFT",
+        "🛡️ 우주 & 방산": "LMT,RTX,GD,BA,NOC,AXON,RKLB",
+        "🛍️ 소비재 & 배당성장": "COST,WMT,TGT,KO,PEP,MCD,SBUX,NKE,LULU,O,SCHD",
+        "📈 3배 레버리지 (야수의 심장)": "TQQQ,SOXL,FNGU,BULZ,NVDL,TSLL,CONL"
     }
     caption = "💡 티커 입력 (예: NVDA, TSLA)"
 
