@@ -4,6 +4,9 @@ import pandas as pd
 import pandas_ta as ta
 import datetime
 
+# yfinance 인증 문제 해결을 위한 코드 추가
+yf.pdr_override()
+
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Chart Screener", layout="wide")
 
@@ -38,144 +41,126 @@ tickers_input = st.sidebar.text_area(
 st.sidebar.caption("💡 종목 코드만 입력하세요 (자동으로 .KS 추가)")
 stop_loss_pct = st.sidebar.slider("손절가 비율 설정 (%)", 1, 10, 3)
 
+# --- 데이터 기간 설정 ---
+start_date = st.sidebar.date_input("분석 시작일", datetime.date(2023, 1, 1))
+end_date = st.sidebar.date_input("분석 종료일", datetime.date.today())
 
-# --- 분석 함수 ---
-def analyze_stock(ticker):
-    try:
-        # 데이터 다운로드 (최근 1년치 - 200일선 계산 위해 충분히)
-        df = yf.download(ticker, period="1y", progress=False)
-
-        if df.empty:
-            st.error(f"'{ticker}'에 대한 데이터를 찾을 수 없습니다. 티커를 확인해주세요.")
-            return None
-        if len(df) < 200:
-            st.warning(f"'{ticker}'에 대한 데이터가 부족하여 분석할 수 없습니다. (200일 미만)")
-            return None # 데이터 부족
-
-        # 1. 기술적 지표 계산
-        # 이동평균선
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA200'] = df['Close'].rolling(window=200).mean()
-
-        # 볼린저 밴드
-        bb = ta.bbands(df['Close'], length=20, std=2)
-        df = pd.concat([df, bb], axis=1) # 데이터프레임 병합
-
-        # RSI
-        df['RSI'] = ta.rsi(df['Close'], length=14)
-
-        # 거래량 이동평균 (20일)
-        df['Vol_MA20'] = df['Volume'].rolling(window=20).mean()
-
-        # --- 최신 데이터 추출 ---
-        latest = df.iloc[-1]
-        close = latest['Close']
-        ma200 = latest['MA200']
-        rsi = latest['RSI']
-        vol = latest['Volume']
-        vol_avg = latest['Vol_MA20']
-        bb_lower = latest['BBL_20_2.0']
-        bb_upper = latest['BBU_20_2.0']
-
-        # 2. 필터링 로직 (Upgrade)
-
-        # A. 추세 판단 (Trend Filter)
-        trend = "상승세 (Bull)" if close > ma200 else "하락세 (Bear)"
-        trend_score = 1 if close > ma200 else 0
-
-        # B. 거래량 판단 (Volume Filter)
-        vol_ratio = (vol / vol_avg) * 100 # 평소 대비 거래량 %
-        vol_status = "거래량 폭발" if vol_ratio > 150 else "보통"
-
-        # C. 매매 신호 (Signal)
-        signal = "관망"
-        color = "gray"
-
-        # 매수 조건: 상승 추세이고 + 밴드 하단 근처 + RSI 낮음
-        if close > ma200: # 장기 상승 추세일 때만 매수 고려 (안전)
-            if close <= bb_lower * 1.02 and rsi < 45:
-                signal = "🔥 강력 매수 (눌림목)"
-                color = "red"
-            elif close <= bb_lower * 1.05 and vol_ratio > 120:
-                signal = "✅ 매수 고려 (수급 동반)"
-                color = "orange"
-
-        # 매도 조건: 밴드 상단 근처 + RSI 과열
-        if close >= bb_upper * 0.98 and rsi > 70:
-            signal = "🔻 이익 실현 (과열)"
-            color = "blue"
-
-        # D. 손절가 계산 (Stop Loss)
-        stop_price = close * (1 - (stop_loss_pct / 100))
-
-        return {
-            "티커": ticker,
-            "현재가": round(close, 2),
-            "신호": signal,
-            "추세": trend,
-            "거래량": vol_status,
-            "RSI": round(rsi, 1),
-            "손절가": round(stop_price, 2),
-            "차트": df,
-            "컬러": color
-        }
-    except Exception as e:
-        st.error(f"'{ticker}' 분석 중 오류 발생: {e}")
-        return None
-
-# --- 메인 화면 ---
-if st.sidebar.button("종목 분석 시작"):
-    tickers = [t.strip() for t in tickers_input.split(',')]
+# --- 분석 실행 버튼 ---
+if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
     
-    # 한국 주식 티커 자동 변환 (숫자로만 된 경우 .KS 추가)
-    processed_tickers = []
-    for t in tickers:
-        if t.isdigit() and len(t) == 6:
-             processed_tickers.append(f"{t}.KS")
-        else:
-             processed_tickers.append(t)
+    # --- 입력 처리 ---
+    tickers = [f"{ticker.strip()}.KS" for ticker in tickers_input.split(',') if ticker.strip()]
 
-    results = []
-    with st.spinner("AI가 종목을 분석중입니다... 잠시만 기다려주세요."):
-        for ticker in processed_tickers:
-            analysis = analyze_stock(ticker)
-            if analysis:
-                results.append(analysis)
-
-    if not results:
-        st.warning("유효한 분석 결과가 없습니다. 티커를 확인하거나 다른 종목을 시도해보세요.")
-    else:
-        # --- 결과 정렬 ---
-        # 신호 강도에 따라 정렬 (강력매수 > 매수고려 > 관망 > 이익실현 순)
-        signal_order = {"🔥 강력 매수 (눌림목)": 0, "✅ 매수 고려 (수급 동반)": 1, "관망": 2, "🔻 이익 실현 (과열)": 3}
-        results.sort(key=lambda x: signal_order.get(x['신호'], 99))
-
-        st.subheader("종목 분석 결과")
+    if not tickers:
+        st.warning("분석할 종목이 없습니다. 티커를 입력해주세요.")
+        st.stop()
         
-        # 결과 표시 컬럼 수 동적 조절
-        num_results = len(results)
-        num_columns = min(num_results, 3) # 최대 3개 컬럼
-        if num_columns == 0:
-            st.info("분석할 종목이 없습니다.")
-            st.stop()
+    # --- 데이터 분석 ---
+    @st.cache_data
+    def analyze_ticker(ticker):
+        try:
+            # 1. 데이터 다운로드
+            df = yf.download(ticker, start=start_date, end=end_date)
+            if df.empty:
+                return None
+
+            # 2. 기술적 지표 계산
+            df['SMA_200'] = ta.sma(df['Close'], length=200)
+            df['Volume_MA_20'] = ta.sma(df['Volume'], length=20)
             
-        cols = st.columns(num_columns) 
+            # 볼린저 밴드
+            bollinger = ta.bbands(df['Close'], length=20, std=2)
+            df = pd.concat([df, bollinger], axis=1)
 
-        for i, res in enumerate(results):
-            col = cols[i % num_columns]
-            with col:
-                st.markdown(f"""
-                <div style="border: 2px solid {res['컬러']}; border-radius: 10px; padding: 15px; margin-bottom: 20px;">
-                    <h3 style="color: {res['컬러']};">{res['티커']}: <span style="font-weight: normal;">{res['신호']}</span></h3>
-                    <ul>
-                        <li><b>현재가:</b> {res['현재가']:,}</li>
-                        <li><b>추세:</b> {res['추세']}</li>
-                        <li><b>거래량:</b> {res['거래량']}</li>
-                        <li><b>RSI:</b> {res['RSI']}</li>
-                        <li><b>손절가:</b> <span style="color: #FF4B4B;">{res['손절가']:,}</span></li>
-                    </ul>
-                </div>
-                """, unsafe_allow_html=True)
+            df['RSI'] = ta.rsi(df['Close'], length=14)
 
-                # --- 미니 차트 ---
+            # 3. 신호 생성
+            latest = df.iloc[-1]
+            
+            # 추세 신호
+            trend_signal = "상승 추세" if latest['Close'] > latest['SMA_200'] else "하락 추세"
+            
+            # 거래량 신호
+            volume_signal = "거래량 급증" if latest['Volume'] > latest['Volume_MA_20'] * 1.5 else "거래량 보통"
+            
+            # 진입/이탈 신호
+            buy_signal = "매수 고려" if latest['Close'] <= latest['BBL_20_2.0'] and latest['RSI'] < 30 else "관망"
+            
+            # 최종 신호
+            final_signal = "매수" if trend_signal == "상승 추세" and buy_signal == "매수 고려" else "보류"
+            
+            # 손절가
+            stop_loss = latest['Close'] * (1 - stop_loss_pct / 100)
+
+            # 결과 색상
+            color = "#2ECC71" if final_signal == "매수" else ("#F1C40F" if final_signal == "보류" else "#E74C3C")
+            
+            return {
+                "티커": ticker,
+                "신호": final_signal,
+                "현재가": latest['Close'],
+                "추세": trend_signal,
+                "거래량": volume_signal,
+                "RSI": latest['RSI'],
+                "손절가": stop_loss,
+                "컬러": color,
+                "차트": df
+            }
+        
+        except Exception as e:
+            return {
+                "티커": ticker, 
+                "신호": "오류", 
+                "현재가": 0, 
+                "추세": str(e),
+                "거래량": "",
+                "RSI": 0,
+                "손절가": 0,
+                "컬러": "#E74C3C",
+                "차트": pd.DataFrame()
+            }
+    
+    # --- 병렬 분석 및 결과 표시 ---
+    progress_bar = st.progress(0)
+    results = []
+    total_tickers = len(tickers)
+
+    for i, ticker in enumerate(tickers):
+        result = analyze_ticker(ticker)
+        if result:
+            results.append(result)
+        progress_bar.progress((i + 1) / total_tickers)
+
+    # 신호 순으로 정렬 (매수 > 보류 > 오류)
+    results.sort(key=lambda x: (x['신호'] != '매수', x['신호'] != '보류', x['신호'] == '오류'))
+        
+    st.subheader("종목 분석 결과")
+            
+    # 결과 표시 컬럼 수 동적 조절
+    num_results = len(results)
+    num_columns = min(num_results, 3) # 최대 3개 컬럼
+    if num_columns == 0:
+        st.info("분석할 종목이 없습니다.")
+        st.stop()
+        
+    cols = st.columns(num_columns)
+            
+    for i, res in enumerate(results):
+        col = cols[i % num_columns]
+        with col:
+            st.markdown(f"""
+            <div style="border: 2px solid {res['컬러']}; border-radius: 10px; padding: 15px; margin-bottom: 20px;">
+                <h3 style="color: {res['컬러']};">{res['티커']}: <span style="font-weight: normal;">{res['신호']}</span></h3>
+                <ul>
+                    <li><b>현재가:</b> {res['현재가']:,}</li>
+                    <li><b>추세:</b> {res['추세']}</li>
+                    <li><b>거래량:</b> {res['거래량']}</li>
+                    <li><b>RSI:</b> {res['RSI']}</li>
+                    <li><b>손절가:</b> <span style="color: #FF4B4B;">{res['손절가']:,}</span></li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+    
+            # --- 미니 차트 ---
+            if not res['차트'].empty:
                 st.line_chart(res['차트']['Close'][-60:], height=150) # 최근 60일 종가
