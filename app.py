@@ -9,22 +9,21 @@ import json
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v7.7: 메인 화면 최적화
+# v7.8: 모바일 가독성 최적화
 st.title("📈 AI 퀀트 종목 발굴기")
 
-with st.expander("✨ 앱 소개 및 사용법 (v7.7)"):
+with st.expander("✨ 앱 소개 및 사용법 (v7.8)"):
     st.markdown("""
     **AI 퀀트 종목 발굴기는 다음 로직에 따라 매수 타이밍에 근접한 종목을 찾아냅니다.**
 
     **알고리즘 로직:**
     1.  **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
-    2.  **거래량 필터:** 20일 평균 거래량 대비 현재 거래량의 급증 여부 확인
-    3.  **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
-    4.  **리스크 관리:** ATR(변동성)을 기반으로 종목별 손절 라인 자동 계산
+    2.  **타이밍 포착:** 볼린저 밴드 하단 및 RSI 과매도 시그널을 종합하여 신호 생성
+    3.  **리스크 관리:** ATR(변동성) 기반으로 종목별 동적 손절 라인 자동 계산
     ---
-    **v7.7 변경점:**
-    1.  **메인 화면 최적화:** 앱 소개 및 버전 정보를 접이식 메뉴(Expander)에 담아, 분석 결과에 더 집중할 수 있도록 화면을 최적화했습니다.
-    2.  **UI 개선:** 이전 버전의 사이드바 레이아웃 개선 사항을 모두 유지합니다.
+    **v7.8 변경점:**
+    1.  **📱 모바일 최적화:** 분석 결과 테이블의 폰트 크기를 줄이고 컬럼명을 단축하여, 모바일 화면에서도 모든 데이터를 한눈에 볼 수 있도록 가독성을 높였습니다.
+    2.  **UI 개선:** 이전 버전의 모든 UI 개선 사항(메인 화면, 사이드바 등)을 유지합니다.
     """)
 
 # --- 종목명 가져오기 (v7.3 개선) ---
@@ -82,6 +81,7 @@ if 'watchlist_loaded' not in st.session_state:
 market_choice = st.sidebar.radio("시장 선택", ('미국 증시 (US)', '한국 증시 (Korea)'), horizontal=True)
 
 watchlist_str = ", ".join(st.session_state.watchlist)
+# ... (프리셋 내용은 이전과 동일하게 유지) ...
 if market_choice == '한국 증시 (Korea)':
     presets = {
         "관심종목 (Cloud)": watchlist_str,
@@ -199,17 +199,45 @@ if run_analysis_button:
         if ok_results:
             st.subheader("📊 분석 결과")
             res_df = pd.DataFrame(ok_results)
+            
+            # v7.8: 가독성을 위한 컬럼명 변경
+            res_df = res_df.rename(columns={
+                "종목명": "종목", 
+                "현재가": "가", 
+                "손절가": "손절", 
+                "추세": "추", 
+                "거래량": "량"
+            })
+
+            # 1. 신호별 정렬 (강력 매수 우선)
             res_df = res_df.sort_values(by='신호', key=lambda s: s.map({"🔥 강력 매수": 0, "✅ 매수 고려": 1, "관망": 2}).fillna(3))
-            display_cols = ['티커', '종목명', '신호', '현재가', '손절가', '추세', 'RSI', '거래량']
+            
+            # 2. 표시할 컬럼 정의 (v7.8 변경된 이름으로)
+            display_cols = ['티커', '종목', '신호', '가', '손절', '추', 'RSI', '량']
             cols_to_show = [col for col in display_cols if col in res_df.columns]
-            st.dataframe(res_df[cols_to_show].style.format({"현재가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}", "RSI": "{:.1f}"}), use_container_width=True, hide_index=True)
+            
+            # 3. 📱 모바일 최적화 (폰트 사이즈 축소)
+            formats = {
+                "가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}", 
+                "RSI": "{:.0f}" # 소수점 제거
+            }
+            
+            styler = res_df[cols_to_show].style.format(formats)
+            styler.set_properties(**{'font-size': '12px', 'text-align': 'center'})
+            styler.set_table_styles([{'selector': 'th', 'props': [('font-size', '12px')]}])
+
+            # 4. 결과 출력
+            st.dataframe(styler, use_container_width=True, hide_index=True)
 
         if error_results:
             st.subheader("⚠️ 처리 실패/제외 목록")
             err_df = pd.DataFrame(error_results)
             error_display_cols = ['티커', '종목명', '신호', '오류 원인']
             err_cols_to_show = [col for col in error_display_cols if col in err_df.columns]
-            st.dataframe(err_df[err_cols_to_show], use_container_width=True, hide_index=True)
+            
+            err_styler = err_df[err_cols_to_show].style.set_properties(**{'font-size': '12px'})
+            st.dataframe(err_styler, use_container_width=True, hide_index=True)
+
 
 # --- 사이드바 하단: 관심종목 관리 ---
 st.sidebar.divider()
