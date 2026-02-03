@@ -1,3 +1,4 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -7,27 +8,28 @@ import json
 import re
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v9.0", layout="wide")
+st.set_page_config(page_title="Quant Screener v9.1", layout="wide")
 
-st.title("📈 AI 퀀트 종목 발굴기 (v9.0 - 지지/저항 기반)")
+st.title("📈 AI 퀀트 종목 발굴기 (v9.1 - 지지/저항 분석 강화)")
 
-with st.expander("✨ 앱 소개 및 v9.0 변경점"):
+with st.expander("✨ 앱 소개 및 v9.1 변경점"):
     st.markdown('''
     **AI 퀀트 종목 발굴기는 기술적 분석 지표를 종합하여 매수 타이밍에 근접한 종목을 찾아냅니다.**
 
-    **v9.0 핵심 로직:**
+    **v9.1 핵심 로직:**
     1.  **추세 필터:** 200일 이동평균선을 기반으로 '상승 추세'에 있는 종목을 선별합니다.
     2.  **타이밍 포착 (신호 강화):**
         *   단순 과매도 지표(RSI, 볼린저밴드)를 넘어, **피봇 지지선(S1)** 및 **최근 전저점(Swing Low)**을 함께 분석합니다.
-        *   여러 지지 조건이 중첩되는 구간에서 신호를 발생시켜 신뢰도를 높였습니다. (예: `🔥 강력 매수 (볼린저 하단, 피봇 지지)`)
-    3.  **거래량 분석:** 거래량 급증 시, 상승 에너지를 동반하는 **양봉 거래량**인지 하락 신호인 **음봉 거래량**인지를 구분합니다.
-    4.  **리스크 관리 (손절가 개선):** 기존의 ATR, 고정비율 방식에 더해, 핵심 지지선인 **"피봇 1차 지지선(S1) 이탈 시"**를 손절 기준으로 추가했습니다.
+        *   여러 지지 조건이 중첩되는 구간에서 신호를 발생시켜 신뢰도를 높였습니다.
+    3.  **가독성 개선:** 1차 지지선(S1)이 붕괴된 종목의 경우, **2차 지지선(S2) 값을 보여주고 `(S1 붕괴⚠️)` 경고**를 표시하여 위험을 명확하게 인지할 수 있도록 개선했습니다.
+    4.  **리스크 관리:** '피봇 지지선 이탈' 등 다양한 손절 기준을 제공하여 체계적인 리스크 관리를 돕습니다.
     ''')
 
-# --- 핵심 분석 함수 (v9.0) ---
+# --- 핵심 분석 함수 (v9.1) ---
 
 @st.cache_data(ttl=86400)
 def get_stock_name(ticker):
+    # ... (기존과 동일)
     hotfix_map = {
         "005930.KS": "삼성전자", "000660.KS": "SK하이닉스",
         "373220.KS": "LG에너지솔루션", "373220.KQ": "LG에너지솔루션"
@@ -53,15 +55,17 @@ def get_stock_name(ticker):
     return ticker
 
 def get_pivot_points(df):
-    if len(df) < 2: return 0, 0
-    last = df.iloc[-2] # 전일 데이터 기준
+    if len(df) < 2: return 0, 0, 0
+    last = df.iloc[-2]
     high, low, close = last['high'], last['low'], last['close']
     pivot = (high + low + close) / 3
     s1 = (2 * pivot) - high
     r1 = (2 * pivot) - low
-    return s1, r1
+    s2 = pivot - (high - low)
+    return s1, r1, s2
 
 # --- jsonbin.io 및 Secrets 설정 ---
+# ... (기존과 동일)
 api_key_names = ["JSONBIN_API_KEY", "jsonbin_api_key"]
 bin_id_names = ["JSONBIN_BIN_ID", "jsonbin_bin_id"]
 JSONBIN_API_KEY = next((st.secrets.get(key) for key in api_key_names), None)
@@ -90,15 +94,16 @@ def save_watchlist_to_jsonbin(watchlist_data):
     except Exception: return False
 
 # --- 세션 초기화 ---
+# ... (기존과 동일)
 if 'watchlist_loaded' not in st.session_state:
     st.session_state.watchlist = load_watchlist_from_jsonbin()
     st.session_state.watchlist_loaded = True
 
-# --- 사이드바 UI (v9.0) ---
+# --- 사이드바 UI (v9.1) ---
+# ... (기존과 동일)
 market_choice = st.sidebar.radio("시장 선택", ('미국 증시 (US)', '한국 증시 (Korea)'), horizontal=True)
 watchlist_str = ", ".join(st.session_state.watchlist)
 
-# 프리셋 (한국)
 if market_choice == '한국 증시 (Korea)':
     presets = {
         "❤️ 내 관심종목": watchlist_str,
@@ -143,7 +148,7 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 분석 로직 (v9.0) ---
+# --- 분석 로직 (v9.1) ---
 def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
     try:
         # 1. 지표 계산
@@ -165,14 +170,19 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         currency = "₩" if market == '한국 증시 (Korea)' else "$"
 
         # 2. 지지/저항 레벨 산출
-        s1, r1 = get_pivot_points(df)
+        s1, r1, s2 = get_pivot_points(df)
         swing_low_20d = df['low'].tail(20).min()
 
-        # 3. 신호 로직 강화
+        # 3. 지지선 붕괴 시 UI 표시 개선
+        support_display = f"{currency}{s1:,.0f}" if s1 > 0 else "N/A"
+        if s1 > 0 and close < s1:
+            support_display = f"{currency}{s2:,.0f} (S1 붕괴⚠️)"
+
+        # 4. 신호 로직 강화
         score, reasons = 0, []
         if close <= latest[bbl_col] * 1.01:
             score += 1; reasons.append("볼린저 하단")
-        if s1 > 0 and close <= s1 * 1.02:
+        if s1 > 0 and close <= s1 * 1.02: # 붕괴되지 않은 지지선 근처일때만 점수 부여
             score += 1; reasons.append("피봇 지지")
         if close <= swing_low_20d * 1.03:
             score += 1; reasons.append("전저점 근접")
@@ -188,14 +198,14 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
             elif score == 1 and rsi < 45:
                 signal = f"✅ 매수 고려 ({reasons[0]})" if reasons else "✅ 매수 고려"
 
-        # 4. 거래량 필터 강화
+        # 5. 거래량 필터 강화
         vol_signal = "보통"
         if 'volume' in df.columns and len(df) > 20:
             vol_avg_20 = df['volume'].rolling(20).mean().iloc[-1]
             if vol_avg_20 > 0 and latest['volume'] > vol_avg_20 * 1.5:
                 vol_signal = "⬆️ 양봉 급증" if close > latest['open'] else "⬇️ 음봉 급증"
 
-        # 5. 손절가 계산 방식 변경
+        # 6. 손절가 계산 방식 변경
         loss_info = "N/A"
         if stop_loss_mode == "ATR 기반 (권장)":
             loss_price = close - (latest[atr_col] * kwargs.get('atr_multiplier', 2.0))
@@ -209,7 +219,8 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
 
         return {
             "티커": ticker, "신호": signal, "현재가": close, "손절가": loss_info,
-            "지지(S1)": s1, "저항(R1)": r1, "RSI": rsi, "추세": trend, "거래량": vol_signal
+            "지지(S1)": support_display, "저항(R1)": r1, "RSI": rsi, 
+            "추세": trend, "거래량": vol_signal
         }
     except Exception as e:
         return {"티커": ticker, "신호": "분석 오류", "오류 원인": str(e)}
@@ -217,6 +228,7 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
 
 # --- 실행 로직 ---
 if run_analysis_button:
+    # ... (기존과 동일)
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
     for t in tickers_raw:
@@ -242,7 +254,6 @@ if run_analysis_button:
                     if not df_kq.empty:
                         df, ticker, stock_name = df_kq, retry_ticker, get_stock_name(retry_ticker)
                 
-                # 컬럼 정리 (MultiIndex 대응)
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0).str.lower()
                 else:
@@ -261,23 +272,23 @@ if run_analysis_button:
                 error_results.append({"티커": ticker, "종목명": stock_name, "신호": "실패", "오류 원인": str(e)})
         bar.empty()
 
-        # --- 결과 출력 (v9.0) ---
+        # --- 결과 출력 (v9.1) ---
         if ok_results:
             st.success(f"✅ 분석 완료! ({len(ok_results)}개 종목)")
             res_df = pd.DataFrame(ok_results)
             
-            # 신호 레벨에 따라 정렬
             signal_order = {'🔥': 0, '✅': 1, '관': 2}
             res_df['sort_key'] = res_df['신호'].apply(lambda x: signal_order.get(x[0], 99))
             res_df = res_df.sort_values(by='sort_key')
             
-            # 출력 컬럼 정의
             currency_format = "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}"
             cols = ["티커", "종목명", "신호", "현재가", "손절가", "지지(S1)", "저항(R1)", "RSI", "거래량", "추세"]
             final_df = res_df[[c for c in cols if c in res_df.columns]]
             
             styler = final_df.style.format({
-                "현재가": currency_format, "지지(S1)": currency_format, "저항(R1)": currency_format, "RSI": "{:.1f}"
+                "현재가": currency_format, 
+                "저항(R1)": currency_format, # '지지(S1)'은 이미 문자열이라 포맷 제외
+                "RSI": "{:.1f}"
             })
             styler.set_properties(**{'font-size': '13px', 'text-align': 'center'})
             styler.set_table_styles([{'selector': 'th', 'props': [('font-size', '13px'), ('text-align', 'center')]}])
@@ -289,6 +300,7 @@ if run_analysis_button:
             st.dataframe(pd.DataFrame(error_results), hide_index=True)
 
 # --- 관심종목 관리 ---
+# ... (기존과 동일)
 st.sidebar.divider()
 st.sidebar.subheader("❤️ 관심종목 관리")
 with st.sidebar.expander("목록 편집"):
