@@ -7,13 +7,16 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-st.title("📈 AI 퀀트 종목 발굴기 (v3.0 - 안정성 강화)")
-st.markdown("""
+# v3.1로 버전 업데이트, 제목 수정
+st.title("📈 AI 퀀트 종목 발굴기 (v3.1 - 오류 원인 추적)")
+st.markdown(""" 
 **알고리즘 로직:**
 1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
 2. **거래량 필터:** 20일 평균 거래량 대비 현재 거래량의 급증 여부 확인
 3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4. **리스크 관리:** 설정된 손절 라인 자동 계산
+---
+**v3.1 변경점:** '알 수 없는 오류' 발생 시, 시스템 내부의 상세한 오류 메시지를 함께 표시하여 원인 파악이 쉽도록 개선했습니다.
 """)
 
 # --- 사이드바 설정 ---
@@ -42,7 +45,7 @@ st.sidebar.caption(caption)
 stop_loss_pct = st.sidebar.slider("손절가 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
 # --- 분석 함수 (오류 보고 기능 강화) ---
-@st.cache_data(ttl=600) # 10분 캐시
+@st.cache_data(ttl=300) # 5분 캐시
 def analyze_stock(ticker):
     try:
         df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
@@ -67,7 +70,9 @@ def analyze_stock(ticker):
             return {"티커": ticker, "신호": "오류", "오류 원인": "데이터 정제 후 비어있음"}
 
         latest = df.iloc[-1]
-        close, ma200, rsi, vol, vol_avg, bb_lower, bb_upper = latest[['Close', 'SMA_200', 'RSI_14', 'Volume', 'Volume_MA20', 'BBL_20_2.0', 'BBU_20_2.0']]
+        close, ma200, rsi, vol, vol_avg, bb_lower, bb_upper = latest[[
+'Close', 'SMA_200', 'RSI_14', 'Volume', 'Volume_MA20', 'BBL_20_2.0', 'BBU_20_2.0'
+]]
 
         trend = "상승" if close > ma200 else "하락"
         volume_signal = "급증" if vol > vol_avg * 1.5 else "보통"
@@ -88,7 +93,8 @@ def analyze_stock(ticker):
             "추세": trend, "RSI": rsi, "거래량": volume_signal, "손절가": stop_price,
         }
     except Exception as e:
-        return {"티커": ticker, "신호": "오류", "오류 원인": f"알 수 없는 오류"}
+        # ❗️ 핵심 수정: '알 수 없는 오류'에 실제 오류 메시지(e)를 포함하여 반환
+        return {"티커": ticker, "신호": "오류", "오류 원인": f"알 수 없는 오류: {str(e)}"}
 
 # --- 실행 버튼 및 결과 표시 ---
 if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
@@ -103,25 +109,27 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
 
         for i, ticker in enumerate(tickers):
             data = analyze_stock(ticker)
-            if data['신호'] == '오류':
+            if data.get('신호') == '오류':
                 error_results.append(data)
             else:
                 ok_results.append(data)
             progress_bar.progress((i + 1) / len(tickers), text=f"{ticker} 분석 중...")
 
+        # 성공 결과 표시
         if ok_results:
             st.subheader("📊 분석 결과")
             res_df = pd.DataFrame(ok_results)
             res_df['score'] = res_df['신호'].map({"🔥 강력 매수":0, "✅ 매수 고려":1, "관망":2, "🔻 이익 실현":3})
             res_df = res_df.sort_values(by="score").drop(columns=['score'])
             
+            # ... (기존의 성공 결과 표시 로직)
             st.dataframe(res_df.style.format(
                 {"현재가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}",
                  "손절가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}",
                  "RSI": "{:.1f}"}
-            ).apply(lambda row: ['font-weight: bold; color:red' if row.name == "🔥 강력 매수" else ''], axis=1, subset=['신호']),
-            use_container_width=True, hide_index=True)
-        
+            ), use_container_width=True, hide_index=True)
+
+        # 실패 결과 표시
         if error_results:
             st.subheader("⚠️ 분석 실패 목록")
             error_df = pd.DataFrame(error_results)[['티커', '오류 원인']]
