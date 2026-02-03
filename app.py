@@ -53,44 +53,36 @@ tickers_input = st.sidebar.text_area(
 st.sidebar.caption(caption)
 stop_loss_pct = st.sidebar.slider("손절가 비율 설정 (%)", 1, 10, 3)
 
-# --- 분석 함수 (업그레이드 버전) ---
+# --- 분석 함수 (오류 처리 강화) ---
 @st.cache_data
 def analyze_stock(ticker):
     try:
-        # 데이터 다운로드 (최근 1년치 - 200일선 계산 위해 충분히)
         df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
+        
+        if df.empty:
+            return {"티커": ticker, "신호": "오류", "현재가": 0, "추세(200일)": "데이터 없음", "RSI": 0, "거래량": "실패", "손절가": 0}
         if len(df) < 200:
-            return None # 데이터 부족
+            return {"티커": ticker, "신호": "오류", "현재가": df.iloc[-1]['Close'], "추세(200일)": "데이터 부족 (200일 미만)", "RSI": 0, "거래량": "실패", "손절가": 0}
 
-        # 1. 기술적 지표 계산
         df['MA200'] = ta.sma(df['Close'], length=200)
         bbands = ta.bbands(df['Close'], length=20, std=2)
         df = pd.concat([df, bbands], axis=1)
         df['RSI'] = ta.rsi(df['Close'], length=14)
         df['Vol_MA20'] = ta.sma(df['Volume'], length=20)
 
-        # --- 최신 데이터 추출 ---
         latest = df.iloc[-1]
-        close = latest['Close']
-        ma200 = latest['MA200']
-        rsi = latest['RSI']
-        vol = latest['Volume']
-        vol_avg = latest['Vol_MA20']
-        bb_lower = latest['BBL_20_2.0']
-        bb_upper = latest['BBU_20_2.0']
+        close, ma200, rsi, vol, vol_avg, bb_lower, bb_upper = latest[['Close', 'MA200', 'RSI', 'Volume', 'Vol_MA20', 'BBL_20_2.0', 'BBU_20_2.0']]
 
-        # 2. 필터링 로직 (Upgrade)
         trend = "상승 추세" if close > ma200 else "하락 추세"
         vol_ratio = (vol / vol_avg) if vol_avg > 0 else 0
         volume_signal = "거래량 급증" if vol_ratio > 1.5 else "거래량 보통"
 
         signal = "관망"
-        if close > ma200: # 장기 상승 추세일 때만 매수 고려
+        if close > ma200:
             if close <= bb_lower and rsi < 35:
                 signal = "🔥 강력 매수"
             elif close <= bb_lower * 1.03 and rsi < 45:
                 signal = "✅ 매수 고려"
-        
         if close >= bb_upper * 0.98 and rsi > 65:
             signal = "🔻 이익 실현"
 
@@ -100,18 +92,13 @@ def analyze_stock(ticker):
             "티커": ticker, "신호": signal, "현재가": close,
             "추세(200일)": trend, "RSI": rsi, "거래량": volume_signal, "손절가": stop_price,
         }
-    except Exception:
-        return None
+    except Exception as e:
+        return {"티커": ticker, "신호": "오류", "현재가": 0, "추세(200일)": f"분석 실패: {e}", "RSI": 0, "거래량": "실패", "손절가": 0}
 
 # --- 실행 버튼 ---
 if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
-    
-    tickers = []
-    if market_choice == '한국 증시 (Korea)':
-        tickers = [f"{t}.KS" for t in tickers_raw]
-    else: # 미국 증시
-        tickers = tickers_raw
+    tickers = [f"{t}.KS" for t in tickers_raw] if market_choice == '한국 증시 (Korea)' else tickers_raw
 
     if not tickers:
         st.warning("분석할 종목이 없습니다. 티커를 입력해주세요.")
@@ -120,32 +107,30 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
         progress_bar = st.progress(0, text="분석 시작...")
         
         for i, ticker in enumerate(tickers):
-            data = analyze_stock(ticker)
-            if data:
-                results.append(data)
+            results.append(analyze_stock(ticker))
             progress_bar.progress((i + 1) / len(tickers), text=f"{ticker} 분석 중...")
         
-        if results:
-            res_df = pd.DataFrame(results)
-            res_df['signal_score'] = res_df['신호'].map({
-                "🔥 강력 매수": 0, "✅ 매수 고려": 1, "관망": 2, "🔻 이익 실현": 3, "오류": 4
-            })
+        res_df = pd.DataFrame(results)
+        if res_df.empty or all(res_df['신호'] == '오류'):
+            st.warning("분석 결과가 없습니다. 티커를 확인하거나 다른 종목을 시도해보세요.")
+            st.dataframe(res_df, use_container_width=True, hide_index=True)
+        else:
+            res_df['signal_score'] = res_df['신호'].map({"🔥 강력 매수": 0, "✅ 매수 고려": 1, "관망": 2, "🔻 이익 실현": 3, "오류": 4})
             res_df = res_df.sort_values(by="signal_score").drop(columns=['signal_score'])
             
             def color_signal(val):
-                color = 'black'
+                color = 'grey'
                 if "강력 매수" in val: color = 'red'
                 elif "매수 고려" in val: color = 'orange'
                 elif "이익 실현" in val: color = 'blue'
+                elif val == "관망": color = 'black'
                 return f'color: {color}; font-weight: bold'
 
             st.subheader("📊 분석 결과")
-            currency_format = "${:,.2f}" if market_choice == '미국 증시 (US)' else "₩{:,.0f}"
+            currency_format = "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}"
             st.dataframe(
                 res_df.style.map(color_signal, subset=['신호'])
-                .format({"현재가": currency_format, "손절가": currency_format, "RSI": "{:.1f}"}),
+                .format({"현재가": currency_format, "손절가": currency_format, "RSI": "{:.1f}"}, na_rep="-"),
                 use_container_width=True,
                 hide_index=True,
             )
-        else:
-            st.warning("분석 결과가 없습니다. 티커를 확인하거나 다른 종목을 시도해보세요.")
