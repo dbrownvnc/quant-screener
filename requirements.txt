@@ -2,4 +2,3 @@ streamlit
 yfinance
 pandas
 pandas_ta
-finance-datareader
