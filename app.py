@@ -9,8 +9,8 @@ import json
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v7.4: UI 구조 개선
-st.title("📈 AI 퀀트 종목 발굴기 (v7.4)")
+# v7.5: 오류 수정 및 안정성 강화
+st.title("📈 AI 퀀트 종목 발굴기 (v7.5)")
 st.markdown("""
 **알고리즘 로직:**
 1.  **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -18,9 +18,9 @@ st.markdown("""
 3.  **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4.  **리스크 관리:** ATR(변동성)을 기반으로 종목별 손절 라인 자동 계산
 ---
-**v7.4 변경점:**
-1.  **사이드바 UI 구조 개선:** '관심종목 관리' 메뉴를 사이드바 하단으로 이동하여 편의성을 높였습니다.
-2.  **안정성 유지:** v7.3의 안정화된 종목명 조회 로직은 그대로 유지됩니다.
+**v7.5 변경점:**
+1.  **핵심 오류 해결:** 분석 결과 정렬 시 발생하던 `KeyError`를 수정하여 앱이 정상적으로 작동하도록 했습니다.
+2.  **안정성 강화:** 데이터 표시에 동적 열 선택 로직을 적용하여, 예기치 않은 데이터 구조로 인해 앱이 중단되는 현상을 방지합니다.
 """)
 
 # --- 종목명 가져오기 (v7.3 개선) ---
@@ -45,8 +45,7 @@ JSONBIN_BIN_ID = next((st.secrets.get(key) for key in bin_id_names), None)
 
 if not JSONBIN_API_KEY or not JSONBIN_BIN_ID:
     st.error("⚠️ [설정 오류] `JSONBIN_API_KEY` 또는 `JSONBIN_BIN_ID`를 찾을 수 없습니다.")
-    st.code('''# Streamlit Cloud의 Secrets에 아래와 같이 키를 추가하세요.
-JSONBIN_API_KEY="YOUR_KEY"_BIN_ID="YOUR_ID"''', language='toml')
+    st.code('''# Streamlit Cloud의 Secrets에 아래와 같이 키를 추가하세요.\nJSONBIN_API_KEY="YOUR_KEY"\nJSONBIN_BIN_ID="YOUR_ID"''', language='toml')
     st.stop()
 
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
@@ -75,7 +74,7 @@ if 'watchlist_loaded' not in st.session_state:
     st.session_state.watchlist = load_watchlist_from_jsonbin()
     st.session_state.watchlist_loaded = True
 
-# --- 사이드바 UI (v7.4 구조 변경) ---
+# --- 사이드바 UI (v7.4 구조) ---
 st.sidebar.header("⚙️ 분석 설정")
 market_choice = st.sidebar.radio("시장 선택", ('미국 증시 (US)', '한국 증시 (Korea)'), horizontal=True)
 
@@ -85,7 +84,13 @@ if market_choice == '한국 증시 (Korea)':
         "관심종목 (Cloud)": watchlist_str,
         "💾 반도체 (삼성/하이닉스/HBM)": "005930,000660,042700,000020,028300,005290,005980,088800",
         "🔋 2차전지 & 에코프로 형제": "373220,006400,051910,003670,247540,086520,005070,066970",
-        # ... (rest of the presets remain the same) ...
+        "💉 바이오 (비만/신약/CMO)": "207940,068270,000100,128940,196170,326030,214150,000250",
+        "🚗 자동차 & 부품": "005380,000270,012330,003550,009900,002980",
+        "🛡️ 방산 & 조선 (수출 주도)": "012450,064350,042660,005490,329180,010140,042670",
+        "💡 전력설비 & 원전": "267250,024110,000720,086280,034020,052690",
+        "💄 화장품 & 푸드 (K-수출)": "271560,192820,243070,097950,003230,280360",
+        "🏦 금융지주 & 밸류업": "105560,055550,086790,032830,316140,000810",
+        "📱 네카오 & 게임": "035420,035720,251270,036570,005940,293490"
     }
     caption = "💡 종목 코드 입력 (예: 005930, 247540)"
 else:
@@ -93,7 +98,14 @@ else:
         "관심종목 (Cloud)": watchlist_str,
         "👑 매그니피센트 7 (대장주)": "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA",
         "🤖 AI 반도체 & 하드웨어": "NVDA,AMD,AVGO,TSM,MU,INTC,QCOM,AMAT,LRCX,ARM,SMCI,DELL",
-        # ... (rest of the presets remain the same) ...
+        "💾 AI 소프트웨어 & 보안": "PLTR,SNOW,CRWD,PANW,FTNT,ADBE,CRM,NOW,ORCL,IBM",
+        "💊 비만치료제 & 바이오": "LLY,NVO,VRTX,REGN,AMGN,PFE,MRK,JNJ,UNH,ABBV",
+        "💰 비트코인 & 핀테크": "MSTR,COIN,HOOD,MARA,JPM,V,MA,BLK,PYPL,SQ",
+        "⚡ 전력 & 에너지 (AI데이터센터)": "VST,CEG,NRG,GE,ET,XOM,CVX,NEE",
+        "🚗 전기차 & 자율주행": "TSLA,RIVN,LCID,F,GM,UBER,LYFT",
+        "🛡️ 우주 & 방산": "LMT,RTX,GD,BA,NOC,AXON,RKLB",
+        "🛍️ 소비재 & 배당성장": "COST,WMT,TGT,KO,PEP,MCD,SBUX,NKE,LULU,O,SCHD",
+        "📈 3배 레버리지 (야수의 심장)": "TQQQ,SOXL,FNGU,BULZ,NVDL,TSLL,CONL"
     }
     caption = "💡 티커 입력 (예: NVDA, TSLA)"
 
@@ -111,9 +123,8 @@ else:
     atr_multiplier = st.sidebar.slider("ATR 배수 (k)", 1.0, 5.0, 2.0, 0.1, help="수치가 클수록 손절폭이 넓어집니다.")
     stop_loss_pct = 0
 
-# --- 분석 함수 (내용 동일) ---
+# --- 분석 함수 ---
 def analyze_dataframe(ticker, df, stop_loss_mode, stop_val, market):
-    # ... (function content is the same as v7.3)
     try:
         df.ta.sma(length=200, append=True)
         df.ta.rsi(length=14, append=True)
@@ -149,10 +160,8 @@ def analyze_dataframe(ticker, df, stop_loss_mode, stop_val, market):
     except Exception as e:
         return {"티커": ticker, "신호": "분석 오류", "오류 원인": str(e)}
 
-
-# --- 실행 버튼 및 결과 표시 (내용 동일) ---
+# --- 실행 버튼 및 결과 표시 (v7.5 수정) ---
 if st.sidebar.button("🚀 AI 퀀트 분석 시작!", type="primary"):
-    # ... (analysis logic is the same as v7.3)
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = [f"{t}.KS" if market_choice == '한국 증시 (Korea)' and '.' not in t else t for t in tickers_raw]
     if not tickers:
@@ -162,7 +171,7 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!", type="primary"):
         progress_bar = st.progress(0, text="분석 시작...")
         for i, ticker in enumerate(tickers):
             stock_name = get_stock_name(ticker)
-            progress_bar.progress((i + 1) / len(tickers), f"[{i+1}/{len(tickers)}] {stock_name} 분석 중...")
+            progress_bar.progress((i + 1) / len(tickers), f"[{i+1}/{len(tickers)}] {stock_name} ({ticker}) 분석 중...")
             try:
                 df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
                 if df.empty and market_choice == '한국 증시 (Korea)' and ticker.endswith(".KS"):
@@ -181,16 +190,27 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!", type="primary"):
             except Exception as e:
                 error_results.append({"티커": ticker, "종목명": stock_name, "신호": "다운로드 실패", "오류 원인": str(e)})
         progress_bar.empty()
+        
         if ok_results:
             st.subheader("📊 분석 결과")
-            res_df = pd.DataFrame(ok_results).sort_values('score', key=lambda s: s.map({"🔥 강력 매수": 0, "✅ 매수 고려": 1, "관망": 2}).fillna(3))
-            cols = ['티커', '종목명', '신호', '현재가', '손절가', '추세', 'RSI', '거래량']
-            st.dataframe(res_df[[c for c in cols if c in res_df.columns]].style.format({"현재가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}", "RSI": "{:.1f}"}), use_container_width=True, hide_index=True)
+            res_df = pd.DataFrame(ok_results)
+            # v7.5 수정: 'score' 대신 '신호' 열을 기준으로 정렬
+            res_df = res_df.sort_values(by='신호', key=lambda s: s.map({"🔥 강력 매수": 0, "✅ 매수 고려": 1, "관망": 2}).fillna(3))
+            
+            # v7.5 수정: 데이터프레임에 존재하는 열만 동적으로 선택하여 표시
+            display_cols = ['티커', '종목명', '신호', '현재가', '손절가', '추세', 'RSI', '거래량']
+            cols_to_show = [col for col in display_cols if col in res_df.columns]
+            st.dataframe(res_df[cols_to_show].style.format({"현재가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}", "RSI": "{:.1f}"}), use_container_width=True, hide_index=True)
+
         if error_results:
             st.subheader("⚠️ 처리 실패/제외 목록")
-            st.dataframe(pd.DataFrame(error_results)[['티커', '종목명', '신호', '오류 원인']], use_container_width=True, hide_index=True)
+            err_df = pd.DataFrame(error_results)
+            # v7.5 수정: 데이터프레임에 존재하는 열만 동적으로 선택하여 표시
+            error_display_cols = ['티커', '종목명', '신호', '오류 원인']
+            err_cols_to_show = [col for col in error_display_cols if col in err_df.columns]
+            st.dataframe(err_df[err_cols_to_show], use_container_width=True, hide_index=True)
 
-# --- 사이드바 하단: 관심종목 관리 (v7.4 위치 변경) ---
+# --- 사이드바 하단: 관심종목 관리 ---
 st.sidebar.divider()
 st.sidebar.subheader("❤️ 관심종목 관리 (Cloud)")
 with st.sidebar.expander("관심종목 목록 보기/편집"):
