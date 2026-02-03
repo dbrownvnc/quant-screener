@@ -7,8 +7,8 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v3.8로 버전 업데이트
-st.title("📈 AI 퀀트 종목 발굴기 (v3.8 - 데이터 검증 강화)")
+# v3.9로 버전 업데이트
+st.title("📈 AI 퀀트 종목 발굴기 (v3.9 - 데이터 품질 검증)")
 st.markdown(""" 
 **알고리즘 로직:**
 1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -16,7 +16,7 @@ st.markdown("""
 3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4. **리스크 관리:** 설정된 손절 라인 자동 계산
 ---
-**v3.8 변경점:** 기술적 분석에 필요한 OHLC(시가, 고가, 저가, 종가) 데이터가 모두 존재하는지 확인하는 검증 단계를 추가하여, 일부 지표 계산 실패 오류를 방지합니다.
+**v3.9 변경점:** 데이터의 타입을 강제로 숫자로 변환하고, 유효한 데이터의 개수를 직접 확인하는 등 데이터 '품질' 검증 로직을 대폭 강화하여 지표 계산 실패 문제를 근본적으로 해결합니다.
 """)
 
 # --- 사이드바 설정 ---
@@ -53,13 +53,13 @@ def analyze_dataframe(ticker, df, stop_loss_pct):
         df.ta.rsi(length=14, append=True)
         df.ta.bbands(length=20, std=2, append=True)
 
-        required_cols = ['SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0']
+        required_indicators = ['SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0']
 
         if 'volume' in df.columns:
             df['volume_ma20'] = df['volume'].rolling(window=20).mean()
-            required_cols.append('volume_ma20')
+            required_indicators.append('volume_ma20')
 
-        missing_indicators = [col for col in required_cols if col not in df.columns]
+        missing_indicators = [col for col in required_indicators if col not in df.columns]
         if missing_indicators:
             return {"티커": ticker, "신호": "오류", "오류 원인": f"지표 계산 실패: {missing_indicators}"}
 
@@ -130,21 +130,26 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
 
                 if df.empty:
                     raise ValueError("데이터 없음 (티커를 확인해주세요)")
-                if len(df) < 200:
-                    raise ValueError(f"데이터 부족 (200일 미만: {len(df)}일)")
 
-                # ❗️ 핵심 수정: OHLC 데이터 검증 강화
-                required_ohlc = ['open', 'high', 'low', 'close']
-                missing_ohlc = [col for col in required_ohlc if col not in df.columns]
-                if missing_ohlc:
-                    raise ValueError(f"필수 OHLC 데이터 부족: {missing_ohlc}. 사용 가능한 열: {list(df.columns)}")
+                # ❗️ 핵심 수정 (v3.9): 데이터 품질 검증 (타입 변환 및 유효 데이터 수 확인)
+                required_cols = ['open', 'high', 'low', 'close']
+                for col in required_cols + ['volume']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+                missing_cols = [col for col in required_cols if col not in df.columns]
+                if missing_cols:
+                    raise ValueError(f"필수 OHLC 데이터 부족: {missing_cols}. 사용 가능한 열: {list(df.columns)}")
+
+                if df['close'].count() < 200:
+                    raise ValueError(f"데이터 부족 (유효한 'close' 데이터가 {df['close'].count()}개로, 200개 미만)")
 
                 progress_bar.progress((i + 1) / len(tickers), text=f"[{ticker}] 기술 지표 분석 중...")
                 analysis_result = analyze_dataframe(ticker, df.copy(), stop_loss_pct)
                 
                 if analysis_result.get('신호') == '오류':
                     error_results.append(analysis_result)
-                    if debug_mode and original_df is not None:
+                    if debug_mode and original_df is not in None:
                         error_dfs[ticker] = original_df
                 else:
                     ok_results.append(analysis_result)
