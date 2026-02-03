@@ -1,3 +1,4 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -57,7 +58,8 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
     def analyze_ticker(ticker):
         try:
             # 1. 데이터 다운로드
-            df = yf.download(ticker, start=start_date, end=end_date)
+            stock = yf.Ticker(ticker)
+            df = stock.history(start=start_date, end=end_date)
             if df.empty:
                 return None
 
