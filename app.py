@@ -7,8 +7,8 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v3.7로 버전 업데이트
-st.title("📈 AI 퀀트 종목 발굴기 (v3.7 - 데이터 파싱 강화)")
+# v3.8로 버전 업데이트
+st.title("📈 AI 퀀트 종목 발굴기 (v3.8 - 데이터 검증 강화)")
 st.markdown(""" 
 **알고리즘 로직:**
 1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -16,7 +16,7 @@ st.markdown("""
 3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4. **리스크 관리:** 설정된 손절 라인 자동 계산
 ---
-**v3.7 변경점:** yfinance가 반환하는 다양한 형태의 MultiIndex 데이터 구조를 지능적으로 파싱하도록 로직을 개선하여, 데이터 열 이름이 티커로 잘못 지정되는 문제를 해결했습니다.
+**v3.8 변경점:** 기술적 분석에 필요한 OHLC(시가, 고가, 저가, 종가) 데이터가 모두 존재하는지 확인하는 검증 단계를 추가하여, 일부 지표 계산 실패 오류를 방지합니다.
 """)
 
 # --- 사이드바 설정 ---
@@ -59,9 +59,9 @@ def analyze_dataframe(ticker, df, stop_loss_pct):
             df['volume_ma20'] = df['volume'].rolling(window=20).mean()
             required_cols.append('volume_ma20')
 
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            return {"티커": ticker, "신호": "오류", "오류 원인": f"지표 계산 실패: {missing_cols}"}
+        missing_indicators = [col for col in required_cols if col not in df.columns]
+        if missing_indicators:
+            return {"티커": ticker, "신호": "오류", "오류 원인": f"지표 계산 실패: {missing_indicators}"}
 
         df.dropna(inplace=True)
         if df.empty:
@@ -119,9 +119,7 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
                 if debug_mode:
                     original_df = df.copy()
 
-                # ❗️ 핵심 수정: MultiIndex를 지능적으로 처리
                 if isinstance(df.columns, pd.MultiIndex):
-                    # 레벨 0과 레벨 1을 모두 확인하여 'open', 'close' 같은 키워드가 있는지 검사
                     level0_cols = [str(col).lower() for col in df.columns.get_level_values(0)]
                     if 'open' in level0_cols or 'close' in level0_cols:
                         df.columns = df.columns.get_level_values(0)
@@ -134,9 +132,12 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
                     raise ValueError("데이터 없음 (티커를 확인해주세요)")
                 if len(df) < 200:
                     raise ValueError(f"데이터 부족 (200일 미만: {len(df)}일)")
-                
-                if 'close' not in df.columns:
-                    raise ValueError(f"필수 \'close\' 데이터가 없습니다. 사용 가능한 열: {list(df.columns)}")
+
+                # ❗️ 핵심 수정: OHLC 데이터 검증 강화
+                required_ohlc = ['open', 'high', 'low', 'close']
+                missing_ohlc = [col for col in required_ohlc if col not in df.columns]
+                if missing_ohlc:
+                    raise ValueError(f"필수 OHLC 데이터 부족: {missing_ohlc}. 사용 가능한 열: {list(df.columns)}")
 
                 progress_bar.progress((i + 1) / len(tickers), text=f"[{ticker}] 기술 지표 분석 중...")
                 analysis_result = analyze_dataframe(ticker, df.copy(), stop_loss_pct)
