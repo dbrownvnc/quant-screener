@@ -242,7 +242,12 @@ if run_analysis_button:
                     if not df_kq.empty:
                         df, ticker, stock_name = df_kq, retry_ticker, get_stock_name(retry_ticker)
                 
-                df.columns = df.columns.str.lower()
+                # 컬럼 정리 (MultiIndex 대응)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0).str.lower()
+                else:
+                    df.columns = df.columns.str.lower()
+
                 if df.empty or len(df) < 100:
                     error_results.append({"티커": ticker, "종목명": stock_name, "신호": "데이터 부족"})
                     continue
