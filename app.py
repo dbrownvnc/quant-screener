@@ -7,8 +7,8 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v3.2로 버전 업데이트
-st.title("📈 AI 퀀트 종목 발굴기 (v3.2 - 안정성 강화)")
+# v3.3로 버전 업데이트
+st.title("📈 AI 퀀트 종목 발굴기 (v3.3 - 디버깅 기능 추가)")
 st.markdown(""" 
 **알고리즘 로직:**
 1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -16,7 +16,7 @@ st.markdown("""
 3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4. **리스크 관리:** 설정된 손절 라인 자동 계산
 ---
-**v3.2 변경점:** 일부 종목에서 발생하는 복잡한 데이터 구조(MultiIndex) 오류를 사전에 감지하고 처리하여, 앱의 안정성을 높였습니다.
+**v3.3 변경점:** '상세 디버깅 모드'를 추가했습니다. 오류 발생 시, 해당 종목의 원본 데이터를 직접 확인할 수 있습니다.
 """)
 
 # --- 사이드바 설정 ---
@@ -44,21 +44,14 @@ else: # 미국 증시
 st.sidebar.caption(caption)
 stop_loss_pct = st.sidebar.slider("손절가 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 분석 함수 (안정성 강화) ---
-@st.cache_data(ttl=300) # 5분 캐시
-def analyze_stock(ticker):
+# ❗️ 핵심 수정: 디버깅 모드 체크박스 추가
+debug_mode = st.sidebar.checkbox("상세 디버깅 모드")
+
+
+# --- 분석 함수 (로직 분리) ---
+# 데이터 계산 부분만 남김
+def analyze_dataframe(ticker, df, stop_loss_pct):
     try:
-        df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
-        
-        # ❗️ 핵심 수정: MultiIndex 구조 확인 및 처리
-        if isinstance(df.columns, pd.MultiIndex):
-            return {"티커": ticker, "신호": "오류", "오류 원인": "데이터 구조 복잡 (MultiIndex)"}
-
-        if df.empty:
-            return {"티커": ticker, "신호": "오류", "오류 원인": "데이터 없음 (티커 확인)"}
-        if len(df) < 200:
-            return {"티커": ticker, "신호": "오류", "오류 원인": f"데이터 부족 ({len(df)}일)"}
-
         df.ta.sma(length=200, append=True)
         df.ta.rsi(length=14, append=True)
         df.ta.bbands(length=20, std=2, append=True)
@@ -108,21 +101,46 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
         st.warning("분석할 종목이 없습니다. 티커를 입력해주세요.")
     else:
         ok_results, error_results = [], []
+        error_dfs = {} # 디버깅용 데이터프레임 저장
+        
         progress_bar = st.progress(0, text="분석 시작...")
 
         for i, ticker in enumerate(tickers):
-            data = analyze_stock(ticker)
-            if data.get('신호') == '오류':
-                error_results.append(data)
-            else:
-                ok_results.append(data)
-            progress_bar.progress((i + 1) / len(tickers), text=f"{ticker} 분석 중...")
+            progress_bar.progress((i + 1) / len(tickers), text=f"{ticker} 데이터 다운로드 중...")
+            
+            error_reason = None
+            try:
+                df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
 
+                if isinstance(df.columns, pd.MultiIndex):
+                    error_reason = "데이터 구조 복잡 (MultiIndex)"
+                elif df.empty:
+                    error_reason = "데이터 없음 (티커 확인)"
+                elif len(df) < 200:
+                    error_reason = f"데이터 부족 ({len(df)}일)"
+
+                if error_reason:
+                    error_results.append({"티커": ticker, "신호": "오류", "오류 원인": error_reason})
+                    if debug_mode:
+                        error_dfs[ticker] = df # 오류 데이터 저장
+                else:
+                    progress_bar.progress((i + 1) / len(tickers), text=f"{ticker} 분석 중...")
+                    data = analyze_dataframe(ticker, df.copy(), stop_loss_pct) # 데이터프레임 복사해서 전달
+                    if data.get('신호') == '오류':
+                        error_results.append(data)
+                    else:
+                        ok_results.append(data)
+
+            except Exception as e:
+                 error_results.append({"티커": ticker, "신호": "오류", "오류 원인": f"다운로드/분석 중 예외 발생: {str(e)}"})
+
+
+        # --- 결과 표시 로직 ---
+        
         # 성공 결과 표시
         if ok_results:
             st.subheader("📊 분석 결과")
             res_df = pd.DataFrame(ok_results)
-            # ... (나머지 성공/실패 결과 표시 로직은 변경 없음)
             res_df['score'] = res_df['신호'].map({"🔥 강력 매수":0, "✅ 매수 고려":1, "관망":2, "🔻 이익 실현":3})
             res_df = res_df.sort_values(by="score").drop(columns=['score'])
             st.dataframe(res_df.style.format(
@@ -137,5 +155,12 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
             error_df = pd.DataFrame(error_results)[['티커', '오류 원인']]
             st.dataframe(error_df, use_container_width=True, hide_index=True)
             
+            # ❗️ 핵심 수정: 디버깅 모드가 켜져 있고, 오류 데이터가 있으면 표시
+            if debug_mode and error_dfs:
+                st.subheader("🐞 디버깅: 원본 데이터")
+                for ticker, df in error_dfs.items():
+                    with st.expander(f"{ticker}의 원본 데이터 보기"):
+                        st.dataframe(df)
+
         if not ok_results and not error_results:
             st.warning("분석 결과가 없습니다. 티커를 확인하거나 다른 종목을 시도해보세요.")
