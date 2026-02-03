@@ -7,8 +7,8 @@ import pandas_ta as ta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v3.4로 버전 업데이트
-st.title("📈 AI 퀀트 종목 발굴기 (v3.4 - MultiIndex 자동 처리)")
+# v3.5로 버전 업데이트
+st.title("📈 AI 퀀트 종목 발굴기 (v3.5 - 데이터 처리 로직 개선)")
 st.markdown(""" 
 **알고리즘 로직:**
 1. **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -16,7 +16,7 @@ st.markdown("""
 3. **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4. **리스크 관리:** 설정된 손절 라인 자동 계산
 ---
-**v3.4 변경점:** 복잡한 데이터 구조(MultiIndex)를 자동으로 감지하고 단순화하여, 이전에는 분석에 실패했던 종목들도 분석할 수 있도록 안정성을 대폭 향상했습니다.
+**v3.5 변경점:** 데이터 열 이름을 표준화(소문자)하고 거래량 데이터가 없는 경우를 처리하여, 데이터 불일치로 인한 분석 오류를 해결했습니다.
 """)
 
 # --- 사이드바 설정 ---
@@ -46,17 +46,21 @@ stop_loss_pct = st.sidebar.slider("손절가 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 debug_mode = st.sidebar.checkbox("상세 디버깅 모드")
 
 
-# --- 분석 함수 ---
+# --- 분석 함수 (안정성 대폭 강화) ---
 def analyze_dataframe(ticker, df, stop_loss_pct):
     try:
-        # 기술 지표 계산
+        # 기술 지표 계산 (pandas-ta는 uppercase 컬럼을 생성)
         df.ta.sma(length=200, append=True)
         df.ta.rsi(length=14, append=True)
         df.ta.bbands(length=20, std=2, append=True)
-        df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
 
-        # 필수 지표 확인
-        required_cols = ['SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0', 'Volume_MA20']
+        required_cols = ['SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0']
+
+        # 거래량 분석 (소문자 'volume' 컬럼이 있는 경우에만)
+        if 'volume' in df.columns:
+            df['volume_ma20'] = df['volume'].rolling(window=20).mean()
+            required_cols.append('volume_ma20')
+
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             return {"티커": ticker, "신호": "오류", "오류 원인": f"지표 계산 실패: {missing_cols}"}
@@ -65,24 +69,23 @@ def analyze_dataframe(ticker, df, stop_loss_pct):
         if df.empty:
             return {"티커": ticker, "신호": "오류", "오류 원인": "데이터 정제 후 비어있음"}
 
-        # 최신 데이터 추출
         latest = df.iloc[-1]
-        close, ma200, rsi, vol, vol_avg, bb_lower, bb_upper = latest[[
-            'Close', 'SMA_200', 'RSI_14', 'Volume', 'Volume_MA20', 'BBL_20_2.0', 'BBU_20_2.0'
-        ]]
-
-        # 분석 로직
+        close, ma200, rsi, bb_lower, bb_upper = latest[['close', 'SMA_200', 'RSI_14', 'BBL_20_2.0', 'BBU_20_2.0']]
+        
+        volume_signal = "N/A"
+        if 'volume' in df.columns and 'volume_ma20' in latest and latest['volume_ma20'] > 0:
+            vol = latest['volume']
+            vol_avg = latest['volume_ma20']
+            volume_signal = "급증" if vol > vol_avg * 1.5 else "보통"
+        
         trend = "상승" if close > ma200 else "하락"
-        volume_signal = "급증" if vol_avg > 0 and vol > vol_avg * 1.5 else "보통"
-
         signal = "관망"
-        if close > ma200: # 상승 추세일 때만 매수 고려
+        if close > ma200: 
             if close <= bb_lower and rsi < 35:
                 signal = "🔥 강력 매수"
             elif close <= bb_lower * 1.03 and rsi < 45:
                 signal = "✅ 매수 고려"
-        
-        if close >= bb_upper and rsi > 65: # 과매수 구간에서는 이익 실현 고려
+        if close >= bb_upper and rsi > 65:
             signal = "🔻 이익 실현"
 
         stop_price = close * (1 - (stop_loss_pct / 100))
@@ -103,35 +106,36 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
         st.warning("분석할 종목이 없습니다. 티커를 입력해주세요.")
     else:
         ok_results, error_results = [], []
-        error_dfs = {} # 디버깅용 원본 데이터프레임 저장
+        error_dfs = {}
         
         progress_bar = st.progress(0, text="분석 시작...")
 
         for i, ticker in enumerate(tickers):
             progress_bar.progress((i + 1) / len(tickers), text=f"[{ticker}] 데이터 다운로드 중...")
             
-            original_df = None # 디버깅을 위해 원본 DF 저장
+            original_df = None
             try:
                 df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
                 if debug_mode:
                     original_df = df.copy()
 
-                # ❗️ 핵심 수정: MultiIndex 자동 처리
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(1)
 
-                # 데이터 유효성 검사
+                # ❗️ 핵심 수정: 모든 열 이름을 소문자로 강제 변환
+                df.columns = [str(col).lower() for col in df.columns]
+
                 if df.empty:
                     raise ValueError("데이터 없음 (티커를 확인해주세요)")
                 if len(df) < 200:
                     raise ValueError(f"데이터 부족 (200일 미만: {len(df)}일)")
+                if 'close' not in df.columns:
+                    raise ValueError("필수 'Close' 데이터가 없습니다.")
 
-                # 데이터 분석
                 progress_bar.progress((i + 1) / len(tickers), text=f"[{ticker}] 기술 지표 분석 중...")
                 analysis_result = analyze_dataframe(ticker, df.copy(), stop_loss_pct)
                 
                 if analysis_result.get('신호') == '오류':
-                    # 분석 함수 내에서 오류가 발생한 경우
                     error_results.append(analysis_result)
                     if debug_mode and original_df is not None:
                         error_dfs[ticker] = original_df
@@ -139,21 +143,17 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!"):
                     ok_results.append(analysis_result)
 
             except Exception as e:
-                 # 다운로드 또는 전처리 단계에서 예외 발생
                  error_results.append({"티커": ticker, "신호": "오류", "오류 원인": str(e)})
                  if debug_mode and original_df is not None:
                      error_dfs[ticker] = original_df
 
-        # --- 결과 표시 로직 ---
         progress_bar.empty()
 
         if ok_results:
             st.subheader("📊 분석 결과")
             res_df = pd.DataFrame(ok_results)
-            # 점수 매겨서 정렬
-            res_df['score'] = res_df['신호'].map({"🔥 강력 매수":0, "✅ 매수 고려":1, "관망":2, "🔻 이익 실현":3})
+            res_df['score'] = res_df['신호'].map({"🔥 강력 매수":0, "✅ 매수 고려":1, "관망":2, "🔻 이익 실현":3, "오류": 4})
             res_df = res_df.sort_values(by="score").drop(columns=['score'])
-            # 포맷팅
             st.dataframe(res_df.style.format(
                 {"현재가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}",
                  "손절가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}",
