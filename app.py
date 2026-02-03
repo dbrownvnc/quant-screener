@@ -9,8 +9,8 @@ import json
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Quant Screener", layout="wide")
 
-# v7.5: 오류 수정 및 안정성 강화
-st.title("📈 AI 퀀트 종목 발굴기 (v7.5)")
+# v7.6: UI 레이아웃 개선
+st.title("📈 AI 퀀트 종목 발굴기 (v7.6)")
 st.markdown("""
 **알고리즘 로직:**
 1.  **추세 필터:** 200일 이동평균선 위에 있는 '상승 추세' 종목을 대상으로 분석
@@ -18,13 +18,13 @@ st.markdown("""
 3.  **타이밍 포착:** 볼린저 밴드 하단 터치 및 RSI 과매도 시그널 확인
 4.  **리스크 관리:** ATR(변동성)을 기반으로 종목별 손절 라인 자동 계산
 ---
-**v7.5 변경점:**
-1.  **핵심 오류 해결:** 분석 결과 정렬 시 발생하던 `KeyError`를 수정하여 앱이 정상적으로 작동하도록 했습니다.
-2.  **안정성 강화:** 데이터 표시에 동적 열 선택 로직을 적용하여, 예기치 않은 데이터 구조로 인해 앱이 중단되는 현상을 방지합니다.
+**v7.6 변경점:**
+1.  **UI 레이아웃 개선:** '분석 시작' 버튼을 티커 입력창 바로 아래로 이동하여 사용성을 높이고, 불필요한 사이드바 헤더를 제거했습니다.
+2.  **안정성 유지:** v7.5의 핵심 오류 수정 및 안정성 강화 로직은 그대로 유지됩니다.
 """)
 
 # --- 종목명 가져오기 (v7.3 개선) ---
-@st.cache_data(ttl=86400) # 24시간 동안 캐시 유지
+@st.cache_data(ttl=86400)
 def get_stock_name(ticker):
     try:
         stock = yf.Ticker(ticker)
@@ -74,8 +74,8 @@ if 'watchlist_loaded' not in st.session_state:
     st.session_state.watchlist = load_watchlist_from_jsonbin()
     st.session_state.watchlist_loaded = True
 
-# --- 사이드바 UI (v7.4 구조) ---
-st.sidebar.header("⚙️ 분석 설정")
+# --- 사이드바 UI (v7.6 구조) ---
+# v7.6: 헤더 제거
 market_choice = st.sidebar.radio("시장 선택", ('미국 증시 (US)', '한국 증시 (Korea)'), horizontal=True)
 
 watchlist_str = ", ".join(st.session_state.watchlist)
@@ -112,6 +112,9 @@ else:
 preset_key = st.sidebar.selectbox("종목 프리셋", presets.keys())
 tickers_input = st.sidebar.text_area("분석할 티커", presets[preset_key], height=100)
 st.sidebar.caption(caption)
+
+# v7.6: 버튼 위치 이동
+run_analysis_button = st.sidebar.button("🚀 AI 퀀트 분석 시작!", type="primary")
 
 st.sidebar.divider()
 st.sidebar.subheader("🛡️ 리스크 관리 설정")
@@ -160,8 +163,8 @@ def analyze_dataframe(ticker, df, stop_loss_mode, stop_val, market):
     except Exception as e:
         return {"티커": ticker, "신호": "분석 오류", "오류 원인": str(e)}
 
-# --- 실행 버튼 및 결과 표시 (v7.5 수정) ---
-if st.sidebar.button("🚀 AI 퀀트 분석 시작!", type="primary"):
+# --- 실행 로직 (v7.6 버튼 위치 변경에 따라 수정) ---
+if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = [f"{t}.KS" if market_choice == '한국 증시 (Korea)' and '.' not in t else t for t in tickers_raw]
     if not tickers:
@@ -194,10 +197,7 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!", type="primary"):
         if ok_results:
             st.subheader("📊 분석 결과")
             res_df = pd.DataFrame(ok_results)
-            # v7.5 수정: 'score' 대신 '신호' 열을 기준으로 정렬
             res_df = res_df.sort_values(by='신호', key=lambda s: s.map({"🔥 강력 매수": 0, "✅ 매수 고려": 1, "관망": 2}).fillna(3))
-            
-            # v7.5 수정: 데이터프레임에 존재하는 열만 동적으로 선택하여 표시
             display_cols = ['티커', '종목명', '신호', '현재가', '손절가', '추세', 'RSI', '거래량']
             cols_to_show = [col for col in display_cols if col in res_df.columns]
             st.dataframe(res_df[cols_to_show].style.format({"현재가": "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}", "RSI": "{:.1f}"}), use_container_width=True, hide_index=True)
@@ -205,7 +205,6 @@ if st.sidebar.button("🚀 AI 퀀트 분석 시작!", type="primary"):
         if error_results:
             st.subheader("⚠️ 처리 실패/제외 목록")
             err_df = pd.DataFrame(error_results)
-            # v7.5 수정: 데이터프레임에 존재하는 열만 동적으로 선택하여 표시
             error_display_cols = ['티커', '종목명', '신호', '오류 원인']
             err_cols_to_show = [col for col in error_display_cols if col in err_df.columns]
             st.dataframe(err_df[err_cols_to_show], use_container_width=True, hide_index=True)
