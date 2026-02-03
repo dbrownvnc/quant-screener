@@ -40,9 +40,9 @@ def get_stock_name(ticker):
         return hotfix_map[ticker.upper()]
 
     # 우선순위 1: 네이버 금융 API (한글 종목명)
-    if ticker.upper().endswith(('.KS', '.KQ')):
+    if ticker.upper().endswith((".KS", ".KQ")):
         try:
-            code = ticker.split('.')[0]
+            code = ticker.split(".")[0]
             url = f"https://ac.finance.naver.com/ac?q={code}&q_enc=euc-kr&t_opts=2"
             response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
             response.raise_for_status()
@@ -119,28 +119,39 @@ if 'watchlist_loaded' not in st.session_state:
 market_choice = st.sidebar.radio("시장 선택", ('미국 증시 (US)', '한국 증시 (Korea)'), horizontal=True)
 
 watchlist_str = ", ".join(st.session_state.watchlist)
+
 if market_choice == '한국 증시 (Korea)':
+    # 팁: 코스닥 종목은 .KQ를 붙여주면 재시도 로직을 거치지 않아 속도가 더 빠릅니다.
     presets = {
-        "관심종목 (Cloud)": watchlist_str,
-        "💾 반도체 (삼성/하이닉스)": "005930,000660,042700,000020,028300,005290",
-        "🔋 2차전지 & 에코프로": "373220,006400,051910,247540,086520,005070",
-        "💉 바이오 (알테오젠/삼바)": "207940,068270,196170,326030,214150",
-        "🚗 자동차 & 기아": "005380,000270,012330,003550,009900",
-        "🛡️ 방산 & 조선": "012450,064350,042660,005490,329180",
-        "📱 네카오 & 게임": "035420,035720,251270,036570"
+        "❤️ 내 관심종목": watchlist_str,
+        "💾 반도체 (삼성/HBM/소부장)": "005930,000660,042700,000020,028300.KQ,058470.KQ,403870.KQ,095340.KQ,005290,088800.KQ",
+        "🔋 2차전지 (셀/양극재/전해질)": "373220,006400,051910,003670,247540.KQ,086520.KQ,066970.KQ,005070,277810.KQ",
+        "⚡ 전력설비 & 원전 (AI수혜)": "267250,024110,010120,000720,086280,034020,052690,005860",
+        "💉 바이오 (비만/신약/CMO)": "207940,068270,196170.KQ,000100,326030,214150.KQ,000250,028300.KQ,096530.KQ",
+        "🛡️ 방산 & 조선 (수출 주도)": "012450,064350,079550,042660,005490,329180,010140,042670,004270",
+        "🚗 자동차 & 부품 (저PBR)": "005380,000270,012330,003550,009900,023160,002980",
+        "💄 K-뷰티 & 푸드 (수출)": "271560,192820,243070,097950,003230,280360,090430,278470",
+        "🏦 금융지주 & 밸류업": "105560,055550,086790,032830,316140,000810,138040,071050",
+        "📱 네카오 & 게임 & 엔터": "035420,035720,251270,036570,005940,293490,006360,352820,122870.KQ"
     }
-    caption = "💡 종목 코드 입력 (예: 005930)"
+    caption = "💡 종목 코드 입력 (예: 005930, 247540.KQ)"
+
 else:
     presets = {
-        "관심종목 (Cloud)": watchlist_str,
-        "👑 매그니피센트 7": "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA",
-        "🤖 AI 반도체": "NVDA,AMD,AVGO,TSM,MU,INTC,ARM,SMCI",
-        "💾 AI 소프트웨어": "PLTR,SNOW,CRWD,PANW,ADBE,MSFT",
-        "💊 비만치료제": "LLY,NVO,VRTX,AMGN,PFE",
-        "💰 비트코인/핀테크": "MSTR,COIN,HOOD,MARA,SQ,PYPL",
-        "🚗 전기차": "TSLA,RIVN,LCID,F,GM"
+        "❤️ 내 관심종목": watchlist_str,
+        "👑 매그니피센트 7 (빅테크)": "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA",
+        "🤖 AI 반도체 & 하드웨어": "NVDA,AMD,AVGO,TSM,MU,INTC,QCOM,AMAT,LRCX,ARM,SMCI,DELL,VRT,PSTG",
+        "💾 AI 소프트웨어 & 보안": "PLTR,SNOW,CRWD,PANW,FTNT,ADBE,CRM,NOW,ORCL,IBM,MDB,DDOG",
+        "💊 비만치료제 & 헬스케어": "LLY,NVO,VRTX,REGN,AMGN,PFE,MRK,JNJ,UNH,ABBV,ISRG,SYK",
+        "💰 비트코인 & 핀테크": "MSTR,COIN,HOOD,MARA,CLSK,JPM,V,MA,BLK,PYPL,SQ,AFRM",
+        "⚡ 전력 & 에너지 (데이터센터)": "VST,CEG,NRG,GE,ET,XOM,CVX,NEE,SO,DUK",
+        "🚗 전기차 & 자율주행": "TSLA,RIVN,LCID,F,GM,UBER,LYFT,ON,MBLY",
+        "🛡️ 우주 & 방산": "LMT,RTX,GD,BA,NOC,AXON,RKLB,PL,KTOS",
+        "🛍️ 소비재 & 리테일": "COST,WMT,TGT,KO,PEP,MCD,SBUX,NKE,LULU,CMG,HD,LOW",
+        "💎 배당성장 & 리츠 (월배당)": "SCHD,O,JEPI,JEPQ,MAIN,VNQ,DGRO,VIG",
+        "📈 3배 레버리지 (야수의 심장)": "TQQQ,SQQQ,SOXL,SOXS,FNGU,BULZ,NVDL,TSLL,CONL,MSTX"
     }
-    caption = "💡 티커 입력 (예: NVDA)"
+    caption = "💡 티커 입력 (예: NVDA, TSLA)"
 
 preset_key = st.sidebar.selectbox("종목 프리셋", presets.keys())
 tickers_input = st.sidebar.text_area("분석할 티커", presets[preset_key], height=100)
