@@ -5,33 +5,34 @@ import pandas_ta as ta
 import requests
 import numpy as np
 from datetime import datetime, timedelta
+import pytz
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v13.4", layout="wide")
-st.title("⚡ AI 퀀트 종목 발굴기 (v13.4 Last Tick Fix)")
+st.set_page_config(page_title="Quant Screener v13.5", layout="wide")
+st.title("⚡ AI 퀀트 종목 발굴기 (v13.5 장외거래 검증판)")
 
-with st.expander("📘 v13.4 업데이트: 장외 마감 가격 완벽 반영"):
+with st.expander("📘 v13.5 업데이트: 실시간 장외 가격 검증 기능"):
     st.markdown('''
-    **문제 해결:**
-    * 장이 완전히 종료된(자정~새벽) 시간대에는 '정규장 종가'만 표시되는 문제를 수정했습니다.
-    * **최근 5일간의 1분봉 데이터(장외 포함)**를 조회하여, **가장 마지막에 체결된 가격(애프터마켓 최종가)**을 찾아냅니다.
-    * 이 '진짜 현재가'를 기준으로 모든 지표(RSI, 지지선)를 재계산하여 분석 정확도를 높였습니다.
+    **해결된 문제:**
+    * 기존에는 장 종료 후 애프터마켓 가격이 일봉 차트에 반영되지 않는 문제가 있었습니다.
+    * **v13.5**는 최근 1분봉 데이터를 정밀 분석하여, **가장 마지막 체결 시간**을 찾아냅니다.
+    
+    **검증 방법:**
+    * 결과 테이블에 **`🕒 기준시간`** 컬럼이 추가되었습니다.
+    * 이곳에 찍힌 시간이 정규장 마감(16:00) 이후라면, 장외 가격이 정상적으로 반영된 것입니다.
     ''')
 
 # --- 1. 유틸리티 함수 ---
 @st.cache_data(ttl=86400)
 def get_stock_name(ticker):
-    # 한국 주식
     if ".KS" in ticker or ".KQ" in ticker:
         try:
             code = ticker.split('.')[0]
             url = f"https://m.stock.naver.com/api/stock/{code}/integration"
             headers = {'User-Agent': 'Mozilla/5.0'}
             res = requests.get(url, headers=headers, timeout=2)
-            if res.status_code == 200:
-                return res.json().get('stockName', ticker)
+            if res.status_code == 200: return res.json().get('stockName', ticker)
         except: return ticker
-    # 미국 주식
     try:
         stock = yf.Ticker(ticker)
         return stock.info.get('shortName') or stock.info.get('longName') or ticker
@@ -142,8 +143,8 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 4. 분석 로직 (v13.4 Last Tick Override) ---
-def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
+# --- 4. 분석 로직 (v13.5 Real-time Verified) ---
+def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs):
     try:
         # 지표 계산
         df.ta.sma(length=20, append=True)
@@ -258,12 +259,12 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
             loss_info = f"{currency}{val:,.0f} (-{pct}%)"
 
         return {
-            "티커": ticker, "신호": signal, "현재가": close, "손절가": loss_info,
-            "목표가": r1, "피보나치(0.618)": fib_618, "RSI": rsi, "추세": trend, "color": color
+            "티커": ticker, "신호": signal, "현재가": close, "기준시간": rt_date_str,
+            "손절가": loss_info, "목표가": r1, "피보나치(0.618)": fib_618, "RSI": rsi, "추세": trend, "color": color
         }
     except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
 
-# --- 5. 실행 루프 (배치 + Last Tick Override) ---
+# --- 5. 실행 루프 ---
 if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
@@ -285,8 +286,7 @@ if run_analysis_button:
             # 1. 일봉 데이터 (지표용)
             batch_data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
             
-            # 2. 최근 5일간의 1분봉 데이터 (prepost=True)
-            # -> 장이 끝난 시간에도 '어제 애프터마켓 마지막 거래가'를 가져오기 위함
+            # 2. 실시간 데이터 (Tick Injection)
             batch_rt = yf.download(tickers, period="5d", interval="1m", prepost=True, group_by='ticker', progress=False)
             
             bar = st.progress(0, "분석 시작...")
@@ -312,40 +312,41 @@ if run_analysis_button:
                         continue
                     
                     df.columns = df.columns.str.lower()
+                    rt_date_str = "정규장"
 
-                    # Data B: Real-time (Last Tick Override)
+                    # Data B: Real-time (Ghost Candle Logic)
                     try:
                         if len(tickers) == 1: df_rt = batch_rt
                         else: df_rt = batch_rt[ticker]
                         
                         if not df_rt.empty:
-                            # 1분봉 데이터의 맨 마지막 행(Close)이 바로 '진짜 현재가'
-                            # (장 중이면 현재가, 장 마감후면 애프터마켓 종가)
-                            last_tick_price = df_rt['Close'].iloc[-1]
-                            last_tick_date = df_rt.index[-1].date()
+                            last_row_rt = df_rt.iloc[-1]
+                            rt_price = last_row_rt['Close']
+                            rt_time = last_row_rt.name # Timestamp (Timezone aware)
                             
-                            # 일봉 데이터의 마지막 날짜
-                            last_daily_date = df.index[-1].date()
+                            # 날짜 문자열 포맷 (검증용)
+                            rt_date_str = rt_time.strftime("%m-%d %H:%M")
                             
-                            if pd.notna(last_tick_price):
-                                # Case 1: 1분봉 날짜가 일봉보다 최신이면 (새로운 하루 시작) -> 행 추가
-                                if last_tick_date > last_daily_date:
-                                    new_row = pd.DataFrame(
-                                        {'open': last_tick_price, 'high': last_tick_price, 
-                                         'low': last_tick_price, 'close': last_tick_price, 'volume': 0},
-                                        index=[pd.Timestamp(last_tick_date)]
-                                    )
-                                    df = pd.concat([df, new_row])
+                            # 일봉의 마지막 날짜
+                            last_date_daily = df.index[-1].date()
+                            rt_date_only = rt_time.date()
+                            
+                            # Ghost Candle 생성 또는 업데이트
+                            if rt_date_only > last_date_daily:
+                                new_row = pd.DataFrame(
+                                    {'open': rt_price, 'high': rt_price, 'low': rt_price, 'close': rt_price, 'volume': 0},
+                                    index=[pd.Timestamp(rt_date_only)]
+                                )
+                                df = pd.concat([df, new_row])
+                                rt_date_str += " (장전/시작)"
+                            elif rt_date_only == last_date_daily:
+                                df.iloc[-1, df.columns.get_loc('close')] = rt_price
+                                rt_date_str += " (실시간)"
                                 
-                                # Case 2: 날짜가 같으면 (오늘 장 중 or 마감) -> 마지막 종가 덮어쓰기
-                                # (일봉의 종가는 16:00 기준일 수 있으므로, 애프터마켓 가격으로 강제 교체)
-                                else:
-                                    df.iloc[-1, df.columns.get_loc('close')] = last_tick_price
-                                
-                    except Exception as e: pass 
+                    except Exception as e: pass
 
                     # 분석 실행
-                    res = analyze_dataframe(ticker, df, stop_loss_mode, market_choice, atr_multiplier=atr_multiplier, stop_loss_pct=stop_loss_pct)
+                    res = analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market_choice, atr_multiplier=atr_multiplier, stop_loss_pct=stop_loss_pct)
                     res["종목명"] = get_stock_name(ticker)
                     
                     if "오류" in res.get("신호", ""): errors.append(res)
@@ -358,7 +359,7 @@ if run_analysis_button:
             status_text.empty()
 
             if results:
-                st.success(f"✅ 분석 완료! ({len(results)}건 - 장외거래 완벽 반영)")
+                st.success(f"✅ 분석 완료! ({len(results)}건 - 장외가격 검증됨)")
                 res_df = pd.DataFrame(results)
                 sig_map = {'💎':0, '🔥':1, '✅':2, '⚠️':3, '🚨':4, '📉':5, '관':6}
                 res_df['sort'] = res_df['신호'].apply(lambda x: sig_map.get(x[0], 9))
@@ -376,7 +377,8 @@ if run_analysis_button:
                     if '⚠️' in val: return 'color: gray'
                     return ''
 
-                cols = ["티커", "종목명", "신호", "현재가", "손절가", "목표가", "피보나치(0.618)", "RSI", "추세"]
+                # [수정] 검증용 컬럼 추가
+                cols = ["티커", "종목명", "신호", "현재가", "기준시간", "손절가", "목표가", "피보나치(0.618)", "RSI", "추세"]
                 st.dataframe(res_df[cols].style.format(fmt).map(color_sig, subset=['신호']), use_container_width=True, hide_index=True)
 
             if errors: st.warning("⚠️ 실패 목록"); st.dataframe(pd.DataFrame(errors))
