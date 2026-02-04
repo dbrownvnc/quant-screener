@@ -7,18 +7,18 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v14.1", layout="wide")
-st.title("⚡ AI 퀀트 종목 발굴기 (v14.1 Input Error Fix)")
+st.set_page_config(page_title="Quant Screener v14.2", layout="wide")
+st.title("⚡ AI 퀀트 종목 발굴기 (v14.2 Hybrid Real-Time)")
 
-with st.expander("📘 v14.1 업데이트: MultiIndex 에러 완벽 해결"):
+with st.expander("📘 v14.2 업데이트: 프리셋 종목 실시간 오류 해결"):
     st.markdown('''
-    **문제 해결:**
-    * 티커를 직접 입력할 때 발생하던 `Can only use .str accessor with Index` 에러를 수정했습니다.
-    * 데이터가 다중 컬럼(MultiIndex)으로 들어오더라도, **자동으로 감지하여 단일 컬럼(Flat Index)으로 변환**합니다.
+    **원인 규명:**
+    * 대량의 종목을 한 번에 조회할 때, API 서버가 데이터 부하를 줄이기 위해 '장외 거래 데이터'를 누락시키는 현상을 확인했습니다.
     
-    **기존 기능 유지:**
-    * **24시간 실시간 데이터:** 장외 거래(프리/애프터) 가격을 강제 주입하여 분석.
-    * **속도 최적화:** 배치 다운로드로 빠른 속도 유지.
+    **해결책 (하이브리드 방식):**
+    1.  **과거 데이터(일봉):** 기존처럼 **일괄 다운로드**하여 분석 속도를 유지합니다.
+    2.  **현재가 데이터(1분봉):** 종목 하나하나 **개별적으로 정밀 조회**하여, 장외(프리/애프터) 가격을 강제로 찾아냅니다.
+    * **결과:** 이제 프리셋 리스트의 종목들도 단일 입력 때와 똑같이 **24시간 실시간 가격**이 반영됩니다.
     ''')
 
 # --- 1. 유틸리티 함수 ---
@@ -31,8 +31,7 @@ def get_stock_name(ticker):
             url = f"https://m.stock.naver.com/api/stock/{code}/integration"
             headers = {'User-Agent': 'Mozilla/5.0'}
             res = requests.get(url, headers=headers, timeout=2)
-            if res.status_code == 200:
-                return res.json().get('stockName', ticker)
+            if res.status_code == 200: return res.json().get('stockName', ticker)
         except: return ticker
     # 미국 주식
     try:
@@ -145,10 +144,9 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 4. 분석 로직 (v14.1 Updated) ---
+# --- 4. 분석 로직 (v14.2 Hybrid) ---
 def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs):
     try:
-        # [핵심] 24/7 Tick Injection 완료된 df 사용
         # 지표 계산
         df.ta.sma(length=20, append=True)
         df.ta.sma(length=60, append=True)
@@ -267,12 +265,11 @@ def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs)
         }
     except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
 
-# --- 5. 실행 루프 ---
+# --- 5. 실행 루프 (하이브리드 패치 적용) ---
 if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
     
-    # 스마트 티커 처리
     for t in tickers_raw:
         if market_choice == '한국 증시 (Korea)':
             if t.endswith('.KS') or t.endswith('.KQ'): tickers.append(t)
@@ -284,23 +281,20 @@ if run_analysis_button:
     else:
         results, errors = [], []
         status_text = st.empty()
-        status_text.text("데이터 다운로드 중... (Batch)")
+        status_text.text("데이터 다운로드 중... (Step 1: Daily History Batch)")
         
         try:
-            # 1. 일봉 (Daily)
+            # 1. 일봉 데이터 (일괄 다운로드 - 속도 최적화)
             batch_data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
-            
-            # 2. 실시간 (Real-time Last Tick)
-            batch_rt = yf.download(tickers, period="5d", interval="1m", prepost=True, group_by='ticker', progress=False)
             
             bar = st.progress(0, "분석 시작...")
             
             for i, ticker in enumerate(tickers):
-                status_text.text(f"[{ticker}] 분석 중... ({i+1}/{len(tickers)})")
+                status_text.text(f"[{ticker}] 정밀 분석 중... ({i+1}/{len(tickers)})")
                 bar.progress((i+1)/len(tickers))
                 
                 try:
-                    # [Fix 1] Daily Data Extraction & Flattening
+                    # Data A: Daily (From Batch)
                     if len(tickers) == 1: df = batch_data.copy()
                     else:
                         try: df = batch_data[ticker].copy()
@@ -315,21 +309,19 @@ if run_analysis_button:
                         errors.append({"티커": ticker, "신호": "데이터 없음"})
                         continue
                     
-                    # MultiIndex Check (Daily)
+                    # MultiIndex Flattening
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(-1)
                     df.columns = df.columns.str.lower()
                     
                     rt_date_str = "정규장 종가"
 
-                    # [Fix 2] Real-time Data Extraction & Flattening
+                    # Data B: Real-time (Individual Fetch - Accuracy First)
+                    # [핵심] 루프 안에서 개별적으로 호출하여 1분봉(장외포함)을 강제로 가져옴
                     try:
-                        if len(tickers) == 1: df_rt = batch_rt.copy()
-                        else: df_rt = batch_rt[ticker].copy()
-                        
-                        # MultiIndex Check (Real-time)
-                        if isinstance(df_rt.columns, pd.MultiIndex):
-                            df_rt.columns = df_rt.columns.get_level_values(-1)
+                        ticker_obj = yf.Ticker(ticker)
+                        # 최근 5일치 1분봉 (Pre/Post 포함)
+                        df_rt = ticker_obj.history(period="5d", interval="1m", prepost=True)
                         
                         if not df_rt.empty:
                             last_tick = df_rt.iloc[-1]
@@ -340,7 +332,7 @@ if run_analysis_button:
                             last_date_daily = df.index[-1].date()
                             rt_date_only = rt_time.date()
                             
-                            # Tick Injection (24/7 Cover)
+                            # Ghost Candle Injection
                             if rt_date_only > last_date_daily:
                                 new_row = pd.DataFrame(
                                     {'open': rt_price, 'high': rt_price, 'low': rt_price, 'close': rt_price, 'volume': 0},
@@ -368,7 +360,7 @@ if run_analysis_button:
             status_text.empty()
 
             if results:
-                st.success(f"✅ 분석 완료! ({len(results)}건)")
+                st.success(f"✅ 분석 완료! ({len(results)}건 - 장외 정밀 반영)")
                 res_df = pd.DataFrame(results)
                 sig_map = {'💎':0, '🔥':1, '✅':2, '⚠️':3, '🚨':4, '📉':5, '관':6}
                 res_df['sort'] = res_df['신호'].apply(lambda x: sig_map.get(x[0], 9))
