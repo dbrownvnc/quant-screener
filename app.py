@@ -7,18 +7,28 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v14.2", layout="wide")
-st.title("⚡ AI 퀀트 종목 발굴기 (v14.2 Hybrid Real-Time)")
+st.set_page_config(page_title="Quant Screener v14.3", layout="wide")
+st.title("⚡ AI 퀀트 종목 발굴기 (v14.3)")
 
-with st.expander("📘 v14.2 업데이트: 프리셋 종목 실시간 오류 해결"):
+# [필수] 최상단 투자 유의사항 경고 배너
+st.error("""
+**⚠️ [투자 유의사항] 본 시스템은 차트와 수급 데이터에 기반한 '기술적 분석 도구'입니다.**
+
+이 알고리즘은 **기업의 펀더멘탈(재무제표, 실적, 악재 공시)**이나 **거시경제 상황(금리, 전쟁, 환율)**을 반영하지 못합니다.
+따라서 본 툴의 분석 결과는 참고 자료로만 활용하시고, **반드시 기업 가치 분석과 시장 상황 검토를 병행**한 후 신중하게 투자하시기 바랍니다.
+**모든 투자의 책임은 사용자 본인에게 있습니다.**
+""")
+
+with st.expander("📘 v14.3 가이드: 실시간 하이브리드 분석"):
     st.markdown('''
-    **원인 규명:**
-    * 대량의 종목을 한 번에 조회할 때, API 서버가 데이터 부하를 줄이기 위해 '장외 거래 데이터'를 누락시키는 현상을 확인했습니다.
+    **분석 원리 (Hybrid Real-Time):**
+    1.  **일봉 데이터:** 과거 1년치 흐름을 분석하여 추세와 지지/저항을 찾습니다.
+    2.  **실시간 데이터:** 장외(Pre/Post) 거래를 포함한 최신 체결가를 강제로 주입하여, **지금 당장의 지표(RSI 등)**를 계산합니다.
     
-    **해결책 (하이브리드 방식):**
-    1.  **과거 데이터(일봉):** 기존처럼 **일괄 다운로드**하여 분석 속도를 유지합니다.
-    2.  **현재가 데이터(1분봉):** 종목 하나하나 **개별적으로 정밀 조회**하여, 장외(프리/애프터) 가격을 강제로 찾아냅니다.
-    * **결과:** 이제 프리셋 리스트의 종목들도 단일 입력 때와 똑같이 **24시간 실시간 가격**이 반영됩니다.
+    **활용 팁:**
+    * **💎 인생 매수:** 지지선 3개 중첩 + 과열 해소 (가장 안전)
+    * **🔥 강력 매수:** 지지선 2개 중첩 (추세 추종)
+    * **🕒 체결시간:** 결과표에서 데이터가 현재 시간인지 꼭 확인하세요.
     ''')
 
 # --- 1. 유틸리티 함수 ---
@@ -144,7 +154,7 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 4. 분석 로직 (v14.2 Hybrid) ---
+# --- 4. 분석 로직 (v14.3 Risk Warning & 24/7 Hybrid) ---
 def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs):
     try:
         # 지표 계산
@@ -265,11 +275,12 @@ def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs)
         }
     except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
 
-# --- 5. 실행 루프 (하이브리드 패치 적용) ---
+# --- 5. 실행 루프 ---
 if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
     
+    # 스마트 티커 처리
     for t in tickers_raw:
         if market_choice == '한국 증시 (Korea)':
             if t.endswith('.KS') or t.endswith('.KQ'): tickers.append(t)
@@ -281,10 +292,10 @@ if run_analysis_button:
     else:
         results, errors = [], []
         status_text = st.empty()
-        status_text.text("데이터 다운로드 중... (Step 1: Daily History Batch)")
+        status_text.text("데이터 다운로드 중... (Batch)")
         
         try:
-            # 1. 일봉 데이터 (일괄 다운로드 - 속도 최적화)
+            # 1. 일봉 (Daily Batch)
             batch_data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
             
             bar = st.progress(0, "분석 시작...")
@@ -294,7 +305,7 @@ if run_analysis_button:
                 bar.progress((i+1)/len(tickers))
                 
                 try:
-                    # Data A: Daily (From Batch)
+                    # Data A: Daily Extraction
                     if len(tickers) == 1: df = batch_data.copy()
                     else:
                         try: df = batch_data[ticker].copy()
@@ -309,18 +320,17 @@ if run_analysis_button:
                         errors.append({"티커": ticker, "신호": "데이터 없음"})
                         continue
                     
-                    # MultiIndex Flattening
+                    # MultiIndex Flatten
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(-1)
                     df.columns = df.columns.str.lower()
                     
                     rt_date_str = "정규장 종가"
 
-                    # Data B: Real-time (Individual Fetch - Accuracy First)
-                    # [핵심] 루프 안에서 개별적으로 호출하여 1분봉(장외포함)을 강제로 가져옴
+                    # Data B: Real-time (Individual Fetch)
                     try:
                         ticker_obj = yf.Ticker(ticker)
-                        # 최근 5일치 1분봉 (Pre/Post 포함)
+                        # 최근 5일치 1분봉 (장외 포함) 개별 요청
                         df_rt = ticker_obj.history(period="5d", interval="1m", prepost=True)
                         
                         if not df_rt.empty:
@@ -332,7 +342,7 @@ if run_analysis_button:
                             last_date_daily = df.index[-1].date()
                             rt_date_only = rt_time.date()
                             
-                            # Ghost Candle Injection
+                            # Tick Injection
                             if rt_date_only > last_date_daily:
                                 new_row = pd.DataFrame(
                                     {'open': rt_price, 'high': rt_price, 'low': rt_price, 'close': rt_price, 'volume': 0},
@@ -360,7 +370,7 @@ if run_analysis_button:
             status_text.empty()
 
             if results:
-                st.success(f"✅ 분석 완료! ({len(results)}건 - 장외 정밀 반영)")
+                st.success(f"✅ 분석 완료! ({len(results)}건)")
                 res_df = pd.DataFrame(results)
                 sig_map = {'💎':0, '🔥':1, '✅':2, '⚠️':3, '🚨':4, '📉':5, '관':6}
                 res_df['sort'] = res_df['신호'].apply(lambda x: sig_map.get(x[0], 9))
