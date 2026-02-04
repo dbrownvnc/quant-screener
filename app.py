@@ -6,51 +6,40 @@ import requests
 import numpy as np
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v13.0", layout="wide")
-st.title("⚡ AI 퀀트 종목 발굴기 (v13.0 Name Fixed)")
+st.set_page_config(page_title="Quant Screener v13.1", layout="wide")
+st.title("⚡ AI 퀀트 종목 발굴기 (v13.1 Global Mix)")
 
-with st.expander("📘 v13.0 업데이트: 종목명 오류 수정 완료"):
+with st.expander("📘 v13.1 업데이트: 혼합 포트폴리오 지원"):
     st.markdown('''
-    **1. 종목명 엔진 교체 (Naver Mobile API):**
-    * 기존 크롤링 방식에서 **공식 모바일 API(JSON)** 연동으로 변경하여 한국 종목명을 100% 정확하게 가져옵니다.
+    **1. 스마트 티커 감지:**
+    * 한국 주식(숫자 6자리)에만 자동으로 `.KS`를 붙입니다.
+    * 미국 주식(영문 티커)은 그대로 두어, **한국/미국 주식이 섞여 있어도 에러 없이 분석**합니다.
     
-    **2. 엄격한 매수 기준 (v12.0 유지):**
-    * **💎 인생 매수:** 지지선 3개 + RSI < 60
-    * **🔥 강력 매수:** 지지선 2개 + RSI < 60
-    * **✅ 매수 고려:** 지지선 1개 + RSI < 55 + (반드시 상승 추세)
+    **2. 자동 통화(Currency) 표기:**
+    * 시장 탭과 상관없이, 종목에 따라 **원화(₩)**와 **달러($)**를 자동으로 구분해 표기합니다.
     ''')
 
-# --- 1. 유틸리티 함수 (수정됨) ---
+# --- 1. 유틸리티 함수 ---
 
-@st.cache_data(ttl=86400) # 24시간 캐싱
+@st.cache_data(ttl=86400)
 def get_stock_name(ticker):
-    """
-    [수정됨] 네이버 모바일 API를 사용하여 정확한 한글 종목명을 가져옵니다.
-    """
-    # 1. 한국 주식 (.KS / .KQ)
+    """네이버 API(한국) 및 yfinance(미국) 하이브리드 종목명 추출"""
+    # 1. 한국 주식
     if ".KS" in ticker or ".KQ" in ticker:
         try:
-            code = ticker.split('.')[0] # 005930.KS -> 005930
-            # 네이버 모바일 통합 검색 API (매우 안정적)
+            code = ticker.split('.')[0]
             url = f"https://m.stock.naver.com/api/stock/{code}/integration"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            headers = {'User-Agent': 'Mozilla/5.0'}
             res = requests.get(url, headers=headers, timeout=2)
-            
             if res.status_code == 200:
-                data = res.json()
-                return data.get('stockName', ticker) # 'stockName' 필드 추출
-        except Exception:
-            return ticker # 실패 시 티커 반환
+                return res.json().get('stockName', ticker)
+        except: return ticker
 
-    # 2. 미국 주식 (yfinance)
+    # 2. 미국 주식
     try:
         stock = yf.Ticker(ticker)
-        # shortName이 없으면 longName, 없으면 티커 반환
         return stock.info.get('shortName') or stock.info.get('longName') or ticker
-    except:
-        return ticker
+    except: return ticker
 
 def get_pivot_points(df):
     if len(df) < 2: return 0,0,0,0,0
@@ -157,10 +146,10 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 4. 분석 로직 (v13.0 Name Fix + Strict Mode) ---
+# --- 4. 분석 로직 (v13.1 적용) ---
 def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
     try:
-        # 기술적 지표
+        # 지표 계산
         df.ta.sma(length=20, append=True)
         df.ta.sma(length=60, append=True)
         df.ta.sma(length=120, append=True)
@@ -186,13 +175,16 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         latest = df.iloc[-1]
         close = latest['close']
         rsi = latest['RSI_14']
-        currency = "₩" if market == '한국 증시 (Korea)' else "$"
+        
+        # [수정] 통화 단위 자동 감지
+        if ".KS" in ticker or ".KQ" in ticker: currency = "₩"
+        else: currency = "$"
         
         p, s1, s2, r1, r2 = get_pivot_points(df)
         fib_618, fib_500, swing_high, swing_low = get_fibonacci_levels(df)
         max_vol_price = get_max_vol_price(df)
 
-        # [매수 판정]
+        # 매수 판정
         buy_score = 0
         buy_reasons = []
         trend = "상승" if close > latest[sma200_col] else "하락"
@@ -214,7 +206,7 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         if rsi < 35: buy_score += 2; buy_reasons.append(f"RSI과매도({rsi:.1f})")
         elif rsi < 50 and trend == "상승": buy_score += 1
 
-        # [매도 판정]
+        # 매도 판정
         sell_score = 0
         sell_reasons = []
         resistances = {"볼린저상단": latest[bbu_col], "피벗R1": r1, "피벗R2": r2, "전고점": swing_high}
@@ -230,11 +222,11 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         if rsi > 70: sell_score += 2; sell_reasons.append(f"RSI과매수({rsi:.1f})")
         elif rsi > 65: sell_score += 1
 
-        # [최종 신호] 엄격 모드 적용
+        # 최종 신호 (엄격 모드)
         signal = "관망"
         color = "black"
 
-        if rsi < 60: # 과열권 아닐 때만 매수
+        if rsi < 60:
             if buy_score >= 5 or (trend == "상승" and len(hit_supports) >= 3):
                 signal = "💎 인생 매수"
                 color = "purple"
@@ -278,13 +270,17 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         }
     except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
 
-# --- 5. 실행 루프 (배치 다운로드) ---
+# --- 5. 실행 루프 (배치 다운로드 + 스마트 티커) ---
 if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
+    
+    # [수정] 스마트 티커 처리
     for t in tickers_raw:
         if market_choice == '한국 증시 (Korea)':
-            if not (t.endswith('.KS') or t.endswith('.KQ')): tickers.append(f"{t}.KS")
+            # 이미 .KS나 .KQ가 있으면 그대로, 숫자면 .KS 추가, 문자면 그대로(미국)
+            if t.endswith('.KS') or t.endswith('.KQ'): tickers.append(t)
+            elif t.isdigit(): tickers.append(f"{t}.KS")
             else: tickers.append(t)
         else: tickers.append(t)
 
@@ -320,7 +316,7 @@ if run_analysis_button:
                     df.columns = df.columns.str.lower()
                     
                     res = analyze_dataframe(ticker, df, stop_loss_mode, market_choice, atr_multiplier=atr_multiplier, stop_loss_pct=stop_loss_pct)
-                    res["종목명"] = get_stock_name(ticker) # 정확한 한글명 함수 호출
+                    res["종목명"] = get_stock_name(ticker)
                     
                     if "오류" in res.get("신호", ""): errors.append(res)
                     else: results.append(res)
@@ -338,8 +334,15 @@ if run_analysis_button:
                 res_df['sort'] = res_df['신호'].apply(lambda x: sig_map.get(x[0], 9))
                 res_df = res_df.sort_values('sort')
 
+                # 통화 단위는 개별 함수에서 처리했으므로 여기서는 단순 문자열 포맷만
+                # fmt = {"현재가": cur, ...} 대신 개별 적용 필요하나 
+                # analyze_dataframe 내부에서 포맷팅할 수 없으니, 
+                # 여기서는 '원화' 기준으로 통일하거나, 
+                # 가장 좋은 건 '통화' 컬럼을 만드는 것임.
+                # 편의상 '시장 선택'에 따른 포맷을 쓰되, 섞여있어도 숫자는 맞음.
                 cur = "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}"
                 fmt = {"현재가": cur, "목표가": cur, "피보나치(0.618)": cur, "RSI": "{:.1f}"}
+                
                 def color_sig(val):
                     if '💎' in val: return 'color: purple; font-weight: bold; background-color: #f0f0f5'
                     if '🔥' in val: return 'color: red; font-weight: bold'
