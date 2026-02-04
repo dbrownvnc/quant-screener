@@ -5,34 +5,35 @@ import pandas_ta as ta
 import requests
 import numpy as np
 from datetime import datetime, timedelta
-import pytz
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v13.5", layout="wide")
-st.title("⚡ AI 퀀트 종목 발굴기 (v13.5 장외거래 검증판)")
+st.set_page_config(page_title="Quant Screener v14.0", layout="wide")
+st.title("⚡ AI 퀀트 종목 발굴기 (v14.0 24/7 Live)")
 
-with st.expander("📘 v13.5 업데이트: 실시간 장외 가격 검증 기능"):
+with st.expander("📘 v14.0 업데이트: 24시간 실시간 데이터 강제 적용"):
     st.markdown('''
-    **해결된 문제:**
-    * 기존에는 장 종료 후 애프터마켓 가격이 일봉 차트에 반영되지 않는 문제가 있었습니다.
-    * **v13.5**는 최근 1분봉 데이터를 정밀 분석하여, **가장 마지막 체결 시간**을 찾아냅니다.
+    **완벽한 실시간 반영 원리:**
+    1.  **이원화 수집:** '과거 흐름(일봉)'과 '현재 가격(1분봉, 장외포함)'을 따로 수집합니다.
+    2.  **틱 주입(Tick Injection):** 일봉 차트의 맨 마지막 가격을 **가장 최근 체결가(프리/애프터마켓 포함)**로 강제 교체합니다.
+    3.  **지표 재계산:** 변경된 가격을 기준으로 RSI, 볼린저밴드 등을 다시 계산하므로, **장외 급등락이 분석 결과에 즉시 반영**됩니다.
     
-    **검증 방법:**
-    * 결과 테이블에 **`🕒 기준시간`** 컬럼이 추가되었습니다.
-    * 이곳에 찍힌 시간이 정규장 마감(16:00) 이후라면, 장외 가격이 정상적으로 반영된 것입니다.
+    **검증:** 결과표의 `🕒 체결시간`을 확인하세요. 현재 시간(또는 장 마감 직후 시간)이라면 정상 작동 중입니다.
     ''')
 
 # --- 1. 유틸리티 함수 ---
 @st.cache_data(ttl=86400)
 def get_stock_name(ticker):
+    # 한국 주식
     if ".KS" in ticker or ".KQ" in ticker:
         try:
             code = ticker.split('.')[0]
             url = f"https://m.stock.naver.com/api/stock/{code}/integration"
             headers = {'User-Agent': 'Mozilla/5.0'}
             res = requests.get(url, headers=headers, timeout=2)
-            if res.status_code == 200: return res.json().get('stockName', ticker)
+            if res.status_code == 200:
+                return res.json().get('stockName', ticker)
         except: return ticker
+    # 미국 주식
     try:
         stock = yf.Ticker(ticker)
         return stock.info.get('shortName') or stock.info.get('longName') or ticker
@@ -143,10 +144,10 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 4. 분석 로직 (v13.5 Real-time Verified) ---
+# --- 4. 분석 로직 (v14.0 24/7 Tick Injection) ---
 def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs):
     try:
-        # 지표 계산
+        # [중요] 틱 주입 후 지표 계산
         df.ta.sma(length=20, append=True)
         df.ta.sma(length=60, append=True)
         df.ta.sma(length=120, append=True)
@@ -259,12 +260,12 @@ def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs)
             loss_info = f"{currency}{val:,.0f} (-{pct}%)"
 
         return {
-            "티커": ticker, "신호": signal, "현재가": close, "기준시간": rt_date_str,
+            "티커": ticker, "신호": signal, "현재가": close, "체결시간": rt_date_str,
             "손절가": loss_info, "목표가": r1, "피보나치(0.618)": fib_618, "RSI": rsi, "추세": trend, "color": color
         }
     except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
 
-# --- 5. 실행 루프 ---
+# --- 5. 실행 루프 (Tick Injection Logic) ---
 if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
@@ -283,10 +284,10 @@ if run_analysis_button:
         status_text.text("데이터 다운로드 중... (Batch)")
         
         try:
-            # 1. 일봉 데이터 (지표용)
+            # 1. 일봉 데이터 (History)
             batch_data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
             
-            # 2. 실시간 데이터 (Tick Injection)
+            # 2. 실시간 데이터 (Last Tick) - 최근 5일치 1분봉(Pre/Post 포함)
             batch_rt = yf.download(tickers, period="5d", interval="1m", prepost=True, group_by='ticker', progress=False)
             
             bar = st.progress(0, "분석 시작...")
@@ -312,40 +313,41 @@ if run_analysis_button:
                         continue
                     
                     df.columns = df.columns.str.lower()
-                    rt_date_str = "정규장"
+                    rt_date_str = "정규장 종가"
 
-                    # Data B: Real-time (Ghost Candle Logic)
+                    # Data B: Real-time (Tick Injection)
                     try:
                         if len(tickers) == 1: df_rt = batch_rt
                         else: df_rt = batch_rt[ticker]
                         
                         if not df_rt.empty:
-                            last_row_rt = df_rt.iloc[-1]
-                            rt_price = last_row_rt['Close']
-                            rt_time = last_row_rt.name # Timestamp (Timezone aware)
+                            # 1분봉의 맨 마지막 줄 = '세상에서 가장 최근에 체결된 가격'
+                            last_tick = df_rt.iloc[-1]
+                            rt_price = last_tick['Close']
+                            rt_time = last_tick.name # Timestamp
                             
-                            # 날짜 문자열 포맷 (검증용)
+                            # 날짜 문자열 (검증용)
                             rt_date_str = rt_time.strftime("%m-%d %H:%M")
                             
-                            # 일봉의 마지막 날짜
                             last_date_daily = df.index[-1].date()
                             rt_date_only = rt_time.date()
                             
-                            # Ghost Candle 생성 또는 업데이트
+                            # [핵심] 일봉 데이터의 '오늘' 또는 '마지막 날' 데이터를 '실시간 가격'으로 덮어씀
+                            # 이렇게 해야 RSI나 MA가 이 가격 기준으로 다시 계산됨
                             if rt_date_only > last_date_daily:
+                                # 새로운 날짜면 행 추가 (장 시작 전/후)
                                 new_row = pd.DataFrame(
                                     {'open': rt_price, 'high': rt_price, 'low': rt_price, 'close': rt_price, 'volume': 0},
                                     index=[pd.Timestamp(rt_date_only)]
                                 )
                                 df = pd.concat([df, new_row])
-                                rt_date_str += " (장전/시작)"
-                            elif rt_date_only == last_date_daily:
+                            else:
+                                # 같은 날짜면 종가 업데이트 (장 중)
                                 df.iloc[-1, df.columns.get_loc('close')] = rt_price
-                                rt_date_str += " (실시간)"
                                 
                     except Exception as e: pass
 
-                    # 분석 실행
+                    # 분석 실행 (수정된 df 사용)
                     res = analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market_choice, atr_multiplier=atr_multiplier, stop_loss_pct=stop_loss_pct)
                     res["종목명"] = get_stock_name(ticker)
                     
@@ -359,7 +361,7 @@ if run_analysis_button:
             status_text.empty()
 
             if results:
-                st.success(f"✅ 분석 완료! ({len(results)}건 - 장외가격 검증됨)")
+                st.success(f"✅ 분석 완료! ({len(results)}건)")
                 res_df = pd.DataFrame(results)
                 sig_map = {'💎':0, '🔥':1, '✅':2, '⚠️':3, '🚨':4, '📉':5, '관':6}
                 res_df['sort'] = res_df['신호'].apply(lambda x: sig_map.get(x[0], 9))
@@ -367,7 +369,6 @@ if run_analysis_button:
 
                 cur = "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}"
                 fmt = {"현재가": cur, "목표가": cur, "피보나치(0.618)": cur, "RSI": "{:.1f}"}
-                
                 def color_sig(val):
                     if '💎' in val: return 'color: purple; font-weight: bold; background-color: #f0f0f5'
                     if '🔥' in val: return 'color: red; font-weight: bold'
@@ -377,8 +378,7 @@ if run_analysis_button:
                     if '⚠️' in val: return 'color: gray'
                     return ''
 
-                # [수정] 검증용 컬럼 추가
-                cols = ["티커", "종목명", "신호", "현재가", "기준시간", "손절가", "목표가", "피보나치(0.618)", "RSI", "추세"]
+                cols = ["티커", "종목명", "신호", "현재가", "체결시간", "손절가", "목표가", "피보나치(0.618)", "RSI", "추세"]
                 st.dataframe(res_df[cols].style.format(fmt).map(color_sig, subset=['신호']), use_container_width=True, hide_index=True)
 
             if errors: st.warning("⚠️ 실패 목록"); st.dataframe(pd.DataFrame(errors))
