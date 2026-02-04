@@ -4,25 +4,23 @@ import pandas as pd
 import pandas_ta as ta
 import requests
 import numpy as np
+from datetime import datetime, timedelta
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v13.2", layout="wide")
-st.title("⚡ AI 퀀트 종목 발굴기 (v13.2 장외거래 포함)")
+st.set_page_config(page_title="Quant Screener v13.3", layout="wide")
+st.title("⚡ AI 퀀트 종목 발굴기 (v13.3 Real-Time Fix)")
 
-with st.expander("📘 v13.2 업데이트: 프리/애프터마켓 반영"):
+with st.expander("📘 v13.3 업데이트: 유령 캔들(Ghost Candle) 기법 적용"):
     st.markdown('''
-    **1. 장외 거래(Extended Hours) 실시간 반영:**
-    * 기존 정규장 종가 대신, **프리마켓/애프터마켓/주간거래**를 포함한 실시간 시세를 가져옵니다.
-    * 이 실시간 가격을 기준으로 RSI, 볼린저밴드 등 모든 지표를 재계산하여 **가장 빠른 매수 신호**를 포착합니다.
-    
-    **2. 데이터 처리 방식:**
-    * `1년치 일봉` + `실시간 5분봉(prepost=True)`을 동시에 분석하여 정확도와 속도를 모두 잡았습니다.
+    **기존 문제 해결:**
+    * 단순히 마지막 가격을 덮어쓰지 않고, **실시간 데이터의 날짜**를 확인합니다.
+    * **프리마켓/장외거래**로 인해 일봉 데이터에 '오늘 날짜'가 아직 없다면, **가상의 '오늘 캔들'을 강제로 생성**합니다.
+    * **검증:** 이를 통해 RSI, 볼린저밴드 등 모든 지표가 **지금 당장의 장외 가격**을 반영하여 계산됩니다.
     ''')
 
 # --- 1. 유틸리티 함수 ---
 @st.cache_data(ttl=86400)
 def get_stock_name(ticker):
-    # 1. 한국 주식 (네이버 모바일 API)
     if ".KS" in ticker or ".KQ" in ticker:
         try:
             code = ticker.split('.')[0]
@@ -32,8 +30,6 @@ def get_stock_name(ticker):
             if res.status_code == 200:
                 return res.json().get('stockName', ticker)
         except: return ticker
-
-    # 2. 미국 주식 (yfinance)
     try:
         stock = yf.Ticker(ticker)
         return stock.info.get('shortName') or stock.info.get('longName') or ticker
@@ -65,7 +61,7 @@ def get_max_vol_price(df, period=240):
     recent = df.tail(period)
     return recent.loc[recent['volume'].idxmax()]['close']
 
-# --- 2. 데이터 저장소 (JSONBin) ---
+# --- 2. 데이터 저장소 ---
 api_key_names = ["JSONBIN_API_KEY", "jsonbin_api_key"]
 bin_id_names = ["JSONBIN_BIN_ID", "jsonbin_bin_id"]
 JSONBIN_API_KEY = next((st.secrets.get(key) for key in api_key_names), None)
@@ -144,10 +140,11 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 4. 분석 로직 (v13.2 Real-time Extended) ---
+# --- 4. 분석 로직 (v13.3 Real-time Fix) ---
 def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
     try:
-        # 기술적 지표 계산
+        # [핵심] 컬럼이 소문자로 변환된 상태라고 가정
+        # 기술적 지표 계산 (TA-Lib Wrapper)
         df.ta.sma(length=20, append=True)
         df.ta.sma(length=60, append=True)
         df.ta.sma(length=120, append=True)
@@ -156,10 +153,21 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         df.ta.bbands(length=20, std=2, append=True)
         df.ta.atr(length=14, append=True)
         
-        df = df.dropna()
-        if len(df) < 5: return {"티커": ticker, "신호": "데이터 부족"}
+        # 지표 계산 후 NaN 제거 (데이터 안정성)
+        df_clean = df.dropna()
+        if len(df_clean) < 5: return {"티커": ticker, "신호": "데이터 부족"}
 
-        cols = df.columns
+        # 최신 데이터 추출
+        latest = df_clean.iloc[-1]
+        close = latest['close']
+        rsi = latest['RSI_14']
+        
+        # 통화 단위 설정
+        if ".KS" in ticker or ".KQ" in ticker: currency = "₩"
+        else: currency = "$"
+        
+        # 지표 값 추출 (컬럼명 동적 확인)
+        cols = df_clean.columns
         bbl_col = next((c for c in cols if 'BBL' in str(c)), None)
         bbu_col = next((c for c in cols if 'BBU' in str(c)), None)
         sma200_col = next((c for c in cols if 'SMA_200' in str(c)), None)
@@ -170,18 +178,11 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         if not all([bbl_col, bbu_col, sma200_col, sma60_col, atr_col]):
              return {"티커": ticker, "신호": "지표 실패"}
 
-        latest = df.iloc[-1]
-        close = latest['close']
-        rsi = latest['RSI_14']
-        
-        if ".KS" in ticker or ".KQ" in ticker: currency = "₩"
-        else: currency = "$"
-        
-        p, s1, s2, r1, r2 = get_pivot_points(df)
-        fib_618, fib_500, swing_high, swing_low = get_fibonacci_levels(df)
-        max_vol_price = get_max_vol_price(df)
+        p, s1, s2, r1, r2 = get_pivot_points(df_clean)
+        fib_618, fib_500, swing_high, swing_low = get_fibonacci_levels(df_clean)
+        max_vol_price = get_max_vol_price(df_clean)
 
-        # [매수 판정]
+        # --- 신호 판정 (엄격 모드) ---
         buy_score = 0
         buy_reasons = []
         trend = "상승" if close > latest[sma200_col] else "하락"
@@ -203,7 +204,7 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         if rsi < 35: buy_score += 2; buy_reasons.append(f"RSI과매도({rsi:.1f})")
         elif rsi < 50 and trend == "상승": buy_score += 1
 
-        # [매도 판정]
+        # 매도 스코어링
         sell_score = 0
         sell_reasons = []
         resistances = {"볼린저상단": latest[bbu_col], "피벗R1": r1, "피벗R2": r2, "전고점": swing_high}
@@ -219,7 +220,7 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         if rsi > 70: sell_score += 2; sell_reasons.append(f"RSI과매수({rsi:.1f})")
         elif rsi > 65: sell_score += 1
 
-        # [최종 신호]
+        # 최종 신호
         signal = "관망"
         color = "black"
 
@@ -267,11 +268,12 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         }
     except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
 
-# --- 5. 실행 루프 (이중 배치 다운로드) ---
+# --- 5. 실행 루프 (배치 + 유령 캔들 로직) ---
 if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
     
+    # 스마트 티커 처리
     for t in tickers_raw:
         if market_choice == '한국 증시 (Korea)':
             if t.endswith('.KS') or t.endswith('.KQ'): tickers.append(t)
@@ -283,15 +285,14 @@ if run_analysis_button:
     else:
         results, errors = [], []
         status_text = st.empty()
-        status_text.text("데이터 다운로드 중... (1/2: Daily History)")
+        status_text.text("데이터 다운로드 중... (Batch)")
         
         try:
-            # 1. 일봉 데이터 (지표 계산용) - 1년
+            # 1. 일봉 데이터 (History)
             batch_data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
             
-            status_text.text("데이터 다운로드 중... (2/2: Real-time Extended)")
-            
-            # 2. 실시간 데이터 (프리/애프터장 포함) - 5일, 5분봉
+            # 2. 실시간 데이터 (Real-time Extended)
+            # 최근 5일치 5분봉 (프리/애프터 포함)
             batch_rt = yf.download(tickers, period="5d", interval="5m", prepost=True, group_by='ticker', progress=False)
             
             bar = st.progress(0, "분석 시작...")
@@ -305,8 +306,8 @@ if run_analysis_button:
                     if len(tickers) == 1: df = batch_data.copy()
                     else:
                         try: df = batch_data[ticker].copy()
-                        except KeyError: 
-                            if ".KS" in ticker: # 코스닥 재시도
+                        except KeyError:
+                            if ".KS" in ticker:
                                 alt = ticker.replace(".KS", ".KQ")
                                 df = yf.download(alt, period="1y", progress=False)
                                 if not df.empty: ticker = alt
@@ -316,23 +317,36 @@ if run_analysis_button:
                         errors.append({"티커": ticker, "신호": "데이터 없음"})
                         continue
                     
-                    df.columns = df.columns.str.lower()
+                    df.columns = df.columns.str.lower() # 컬럼 소문자화
 
-                    # Data B: Real-time Extended (장외 포함 최신가 덮어쓰기)
+                    # Data B: Real-time (Ghost Candle Logic)
                     try:
                         if len(tickers) == 1: df_rt = batch_rt
                         else: df_rt = batch_rt[ticker]
                         
                         if not df_rt.empty:
-                            # 5분봉의 가장 마지막 종가 = 현재가 (장외 포함)
-                            current_price = df_rt['Close'].iloc[-1]
-                            if pd.notna(current_price):
-                                # 일봉 데이터의 마지막 row 종가를 실시간 가격으로 업데이트
-                                # (이렇게 해야 RSI, 볼린저밴드가 현재가 기준으로 다시 계산됨)
-                                df.iloc[-1, df.columns.get_loc('close')] = current_price
-                    except: pass # RT 데이터 없으면 그냥 종가 사용
+                            last_row_rt = df_rt.iloc[-1]
+                            rt_price = last_row_rt['Close']
+                            rt_date = last_row_rt.name.date() # Timestamp -> Date
+                            
+                            # 일봉의 마지막 날짜 확인
+                            last_date_daily = df.index[-1].date()
+                            
+                            if rt_date > last_date_daily:
+                                # [Ghost Candle 생성] 
+                                # 일봉에 없는 '새로운 날짜(오늘)'의 데이터가 RT에 존재함 -> 행 추가
+                                new_row = pd.DataFrame(
+                                    {'open': rt_price, 'high': rt_price, 'low': rt_price, 'close': rt_price, 'volume': 0},
+                                    index=[pd.Timestamp(rt_date)]
+                                )
+                                df = pd.concat([df, new_row])
+                            elif rt_date == last_date_daily:
+                                # [Update] 날짜가 같으면 종가만 최신가로 업데이트
+                                df.iloc[-1, df.columns.get_loc('close')] = rt_price
+                                
+                    except Exception as e: pass # RT 데이터 실패해도 일봉으로 계속 진행
 
-                    # 분석 실행
+                    # 분석 실행 (변경된 df 사용)
                     res = analyze_dataframe(ticker, df, stop_loss_mode, market_choice, atr_multiplier=atr_multiplier, stop_loss_pct=stop_loss_pct)
                     res["종목명"] = get_stock_name(ticker)
                     
@@ -346,7 +360,7 @@ if run_analysis_button:
             status_text.empty()
 
             if results:
-                st.success(f"✅ 분석 완료! ({len(results)}건 - 장외거래 반영됨)")
+                st.success(f"✅ 분석 완료! ({len(results)}건)")
                 res_df = pd.DataFrame(results)
                 sig_map = {'💎':0, '🔥':1, '✅':2, '⚠️':3, '🚨':4, '📉':5, '관':6}
                 res_df['sort'] = res_df['신호'].apply(lambda x: sig_map.get(x[0], 9))
@@ -354,6 +368,7 @@ if run_analysis_button:
 
                 cur = "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}"
                 fmt = {"현재가": cur, "목표가": cur, "피보나치(0.618)": cur, "RSI": "{:.1f}"}
+                
                 def color_sig(val):
                     if '💎' in val: return 'color: purple; font-weight: bold; background-color: #f0f0f5'
                     if '🔥' in val: return 'color: red; font-weight: bold'
