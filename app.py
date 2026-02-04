@@ -9,17 +9,17 @@ import numpy as np
 st.set_page_config(page_title="Quant Screener v11.0", layout="wide")
 st.title("💎 AI 퀀트 종목 발굴기 (v11.0 Final)")
 
-with st.expander("📘 v11.0 업데이트: 매수 3단계 & 매도 신호 탑재"):
+with st.expander("📘 v11.0 가이드: 매수 등급 & 매도 신호"):
     st.markdown('''
     **전문가급 판단 로직을 적용하여 신호를 정교하게 분류했습니다.**
     
     1.  **매수 등급 세분화:**
-        * **💎 인생 매수:** 지지선 3개 중첩 (확실한 기회)
-        * **🔥 강력 매수:** 지지선 2개 중첩 (비중 확대)
-        * **✅ 매수 고려:** 지지선 1개 (관찰 시작)
-    2.  **매도(이익 실현) 신호 추가:**
-        * **🚨 이익 실현:** 과매수(RSI 70+) + 저항선(R1/R2) 돌파 시
-        * **📉 분할 매도:** 저항선 터치 또는 과열 조짐 시
+        * **💎 인생 매수:** 지지선 3개 이상 중첩 + 상승 추세 (확실한 기회)
+        * **🔥 강력 매수:** 지지선 2개 이상 중첩 (비중 확대)
+        * **✅ 매수 고려:** 지지선 1개 + 과매도 (관찰 시작)
+    2.  **매도(이익 실현) 신호:**
+        * **🚨 이익 실현:** 과매수(RSI 70+) + 저항선 돌파
+        * **📉 분할 매도:** 저항선 터치 또는 과열 조짐
     ''')
 
 # --- 1. 유틸리티 함수 ---
@@ -103,12 +103,13 @@ if 'watchlist_loaded' not in st.session_state:
     st.session_state.watchlist = load_watchlist()
     st.session_state.watchlist_loaded = True
 
-# --- 3. 사이드바 UI ---
+# --- 3. 사이드바 UI (메뉴 복구 및 빈 칸 설정) ---
 market_choice = st.sidebar.radio("시장 선택", ('미국 증시 (US)', '한국 증시 (Korea)'), horizontal=True)
 watchlist_str = ", ".join(st.session_state.watchlist)
 
+# 기본 프리셋 정의
 if market_choice == '한국 증시 (Korea)':
-    presets = {
+    raw_presets = {
         "❤️ 내 관심종목": watchlist_str,
         "💾 반도체/HBM (50종)": "005930.KS, 000660.KS, 042700.KS, 000020.KS, 028300.KQ, 058470.KQ, 403870.KQ, 095340.KQ, 005290.KS, 088800.KQ, 036540.KQ, 036930.KQ, 000990.KS, 079370.KQ, 030530.KQ, 253450.KQ, 046120.KQ, 054450.KQ, 023460.KQ, 373200.KQ, 281740.KQ, 263360.KQ, 006730.KQ, 039230.KQ, 084370.KQ, 015920.KQ, 140410.KQ, 104830.KQ, 056620.KQ, 092220.KQ, 085370.KQ, 049430.KQ, 077360.KQ, 121890.KQ, 160550.KQ, 043650.KQ, 091700.KQ, 058820.KQ, 135150.KQ, 074950.KQ, 322310.KQ, 402340.KQ, 222800.KQ, 330590.KQ, 131290.KQ, 067310.KQ, 131970.KQ, 089980.KQ, 064290.KQ, 005810.KS",
         "🔋 2차전지/리튬 (45종)": "373220.KS, 006400.KS, 051910.KS, 003670.KS, 247540.KQ, 086520.KQ, 066970.KQ, 005070.KS, 277810.KQ, 000270.KS, 096770.KS, 011790.KS, 025980.KQ, 099190.KQ, 101160.KQ, 307930.KQ, 365550.KQ, 382900.KQ, 450080.KQ, 157970.KS, 217270.KQ, 091990.KQ, 009830.KS, 009540.KS, 005950.KS, 117580.KS, 210980.KS, 034730.KS, 003620.KS, 004100.KS, 345740.KQ, 158310.KQ, 333620.KQ, 354310.KQ, 417010.KQ, 294630.KQ, 348370.KQ, 007460.KQ, 298050.KQ, 054620.KQ, 013700.KS, 020150.KQ, 024880.KS, 002960.KS, 138930.KS",
@@ -119,8 +120,8 @@ if market_choice == '한국 증시 (Korea)':
         "🏦 금융/지주/저PBR (40종)": "105560.KS, 055550.KS, 086790.KS, 032830.KS, 316140.KS, 000810.KS, 138040.KS, 071050.KS, 005380.KS, 000270.KS, 012330.KS, 003550.KS, 009900.KS, 023160.KS, 002980.KS, 001530.KS, 003690.KS, 000050.KS, 004000.KS, 000150.KS, 003540.KS, 016360.KS, 039490.KS, 030200.KS, 003470.KS, 089050.KS, 025530.KS, 025560.KS, 012630.KS, 036700.KS, 000670.KS, 000140.KS, 001040.KS, 000120.KS, 005830.KS, 001740.KS, 001450.KS, 316140.KS, 002240.KS, 000210.KS"
     }
     caption = "💡 종목 코드 입력 (예: 005930, 247540.KQ)"
-else: # 프리셋 (미국)
-    presets = {
+else: # 미국
+    raw_presets = {
         "❤️ 내 관심종목": watchlist_str,
         "👑 M7 & AI 하드웨어 (40종)": "NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, NFLX, AVGO, AMD, ORCL, CRM, ADBE, INTC, QCOM, CSCO, TXN, IBM, UBER, ABNB, TSM, MU, ARM, SMCI, DELL, VRT, PSTG, AMAT, LRCX, KLAC, TER, ASML, MRVL, ON, ANET, JBL, CLS, GFS, STM, NXPI",
         "☁️ SaaS/보안/클라우드 (40종)": "PLTR, SNOW, CRWD, PANW, FTNT, ZS, MDB, DDOG, NET, PATH, HUBS, TEAM, WDAY, NOW, ADSK, ANSS, SNPS, CDNS, SHOP, SQ, U, RBLX, TTD, APP, DUOL, GTLB, CFLT, IOT, HCP, OKTA, DOCU, ZM, ESTC, FSLY, Sentinel, CYBR, TENB, VRNS, QLYS, GEN",
@@ -133,5 +134,218 @@ else: # 프리셋 (미국)
     }
     caption = "💡 티커 입력 (예: NVDA, TSLA)"
 
+# --- [수정] 빈 칸 옵션을 맨 앞에 추가 ---
+presets = {"-- 직접 입력 (빈 칸) --": ""}
+presets.update(raw_presets)
+
 preset_key = st.sidebar.selectbox("종목 프리셋", presets.keys())
-tickers_input = st.sidebar.text_area
+tickers_input = st.sidebar.text_area("분석할 티커", presets[preset_key], height=150)
+st.sidebar.caption(caption)
+run_analysis_button = st.sidebar.button("🚀 AI 퀀트 분석 시작!", type="primary")
+
+st.sidebar.divider()
+st.sidebar.subheader("🛡️ 리스크 관리 (손절)")
+stop_loss_mode = st.sidebar.radio("계산 방식", ("ATR 기반 (권장)", "피봇 지지선 (S1) 기준", "고정 비율 (%)"), horizontal=True, index=0)
+
+atr_multiplier, stop_loss_pct = 0, 0
+if stop_loss_mode == "ATR 기반 (권장)":
+    atr_multiplier = st.sidebar.slider("ATR 배수 (k)", 1.0, 5.0, 2.0, 0.1)
+elif stop_loss_mode == "고정 비율 (%)":
+    stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
+
+# --- 4. 분석 로직 (v11.0 적용) ---
+def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
+    try:
+        # 1. 기술적 지표
+        df.ta.sma(length=20, append=True)
+        df.ta.sma(length=60, append=True)
+        df.ta.sma(length=120, append=True)
+        df.ta.sma(length=200, append=True)
+        df.ta.rsi(length=14, append=True)
+        df.ta.bbands(length=20, std=2, append=True)
+        df.ta.atr(length=14, append=True)
+        df.dropna(inplace=True)
+        if len(df) < 5: return {"티커": ticker, "신호": "데이터 부족"}
+
+        cols = df.columns
+        bbl_col = next((c for c in cols if 'BBL' in str(c)), None)
+        bbu_col = next((c for c in cols if 'BBU' in str(c)), None)
+        sma200_col = next((c for c in cols if 'SMA_200' in str(c)), None)
+        sma60_col = next((c for c in cols if 'SMA_60' in str(c)), None)
+        sma120_col = next((c for c in cols if 'SMA_120' in str(c)), None)
+        atr_col = next((c for c in cols if 'ATRr' in str(c)), None)
+        
+        if not all([bbl_col, bbu_col, sma200_col, sma60_col, atr_col]):
+             return {"티커": ticker, "신호": "지표 실패"}
+
+        latest = df.iloc[-1]
+        close = latest['close']
+        rsi = latest['RSI_14']
+        currency = "₩" if market == '한국 증시 (Korea)' else "$"
+        
+        p, s1, s2, r1, r2 = get_pivot_points(df)
+        fib_618, fib_500, swing_high, swing_low = get_fibonacci_levels(df)
+        max_vol_price = get_max_vol_price(df)
+
+        # 2. 매수 스코어링
+        buy_score = 0
+        buy_reasons = []
+        trend = "상승" if close > latest[sma200_col] else "하락"
+        if close > p: buy_score += 0.5 # 피벗 위 강세
+
+        supports = {
+            "볼린저하단": latest[bbl_col], "피벗S1": s1, "피보나치(0.618)": fib_618,
+            "60일선": latest[sma60_col], "120일선": latest[sma120_col], "최대매물대": max_vol_price
+        }
+        hit_supports = []
+        for name, price in supports.items():
+            if price > 0 and close <= price * 1.025 and close >= price * 0.975:
+                hit_supports.append(name)
+        
+        if hit_supports:
+            buy_score += len(hit_supports) * 1.5
+            buy_reasons.extend(hit_supports)
+        
+        if rsi < 35: buy_score += 2; buy_reasons.append(f"RSI과매도({rsi:.1f})")
+        elif rsi < 45 and trend == "상승": buy_score += 1
+
+        # 3. 매도 스코어링
+        sell_score = 0
+        sell_reasons = []
+        resistances = {"볼린저상단": latest[bbu_col], "피벗R1": r1, "피벗R2": r2, "전고점": swing_high}
+        hit_resistances = []
+        for name, price in resistances.items():
+            if price > 0 and close >= price * 0.98:
+                hit_resistances.append(name)
+        
+        if hit_resistances:
+            sell_score += len(hit_resistances) * 1.5
+            sell_reasons.extend(hit_resistances)
+            
+        if rsi > 70: sell_score += 2; sell_reasons.append(f"RSI과매수({rsi:.1f})")
+        elif rsi > 65: sell_score += 1
+
+        # 4. 최종 신호 판정
+        signal = "관망"
+        color = "black"
+
+        if buy_score >= 5 or (trend == "상승" and len(hit_supports) >= 3):
+            signal = "💎 인생 매수"
+            color = "purple"
+        elif buy_score >= 3.5 or (trend == "상승" and len(hit_supports) >= 2):
+            signal = "🔥 강력 매수"
+            color = "red"
+        elif buy_score >= 2 or (trend == "상승" and len(hit_supports) >= 1):
+            signal = "✅ 매수 고려"
+            color = "orange"
+        
+        if signal == "관망":
+            if sell_score >= 3 or (len(hit_resistances) >= 1 and rsi > 70):
+                signal = "🚨 이익 실현"
+                color = "blue"
+            elif sell_score >= 1.5:
+                signal = "📉 분할 매도"
+                color = "skyblue"
+            elif trend == "하락" and buy_score >= 3:
+                signal = "⚠️ 기술적 반등"
+                color = "gray"
+
+        if signal != "관망":
+            reasons = buy_reasons if "매수" in signal or "반등" in signal else sell_reasons
+            if reasons: signal += f" ({', '.join(reasons)})"
+
+        # 5. 손절가 계산
+        loss_info = "N/A"
+        if stop_loss_mode == "ATR 기반 (권장)":
+            val = close - (latest[atr_col] * kwargs.get('atr_multiplier', 2.0))
+            loss_info = f"{currency}{val:,.0f} (-{round((close-val)/close*100,1)}%)"
+        elif stop_loss_mode == "피봇 지지선 (S1) 기준":
+            loss_info = f"{currency}{s1:,.0f}" if s1>0 else "불가"
+        else:
+            pct = kwargs.get('stop_loss_pct', 3.0)
+            val = close * (1 - pct/100)
+            loss_info = f"{currency}{val:,.0f} (-{pct}%)"
+
+        return {
+            "티커": ticker, "신호": signal, "현재가": close, "손절가": loss_info,
+            "목표가": r1, "피보나치(0.618)": fib_618, "RSI": rsi, "추세": trend, "color": color
+        }
+    except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
+
+# --- 5. 실행 루프 ---
+if run_analysis_button:
+    tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+    tickers = []
+    for t in tickers_raw:
+        if market_choice == '한국 증시 (Korea)':
+            if not (t.endswith('.KS') or t.endswith('.KQ')): tickers.append(f"{t}.KS")
+            else: tickers.append(t)
+        else: tickers.append(t)
+
+    if not tickers: st.warning("분석할 종목을 입력해주세요.")
+    else:
+        results, errors = [], []
+        bar = st.progress(0, "분석 중...")
+        for i, ticker in enumerate(tickers):
+            name = get_stock_name(ticker)
+            bar.progress((i)/len(tickers), f"[{name}] 분석 중...")
+            try:
+                df = yf.download(ticker, period="1y", progress=False)
+                if df.empty and ".KS" in ticker:
+                    retry = ticker.replace(".KS", ".KQ")
+                    df = yf.download(retry, period="1y", progress=False)
+                    if not df.empty: ticker, name = retry, get_stock_name(retry)
+                
+                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0).str.lower()
+                else: df.columns = df.columns.str.lower()
+
+                if len(df) < 60:
+                    errors.append({"티커": ticker, "종목명": name, "신호": "데이터 부족"})
+                    continue
+
+                res = analyze_dataframe(ticker, df, stop_loss_mode, market_choice, atr_multiplier=atr_multiplier, stop_loss_pct=stop_loss_pct)
+                res["종목명"] = name
+                if "오류" in res.get("신호", ""): errors.append(res)
+                else: results.append(res)
+            except Exception as e: errors.append({"티커": ticker, "종목명": name, "신호": "실패", "오류 원인": str(e)})
+        bar.empty()
+
+        if results:
+            st.success(f"✅ 분석 완료! ({len(results)}건)")
+            res_df = pd.DataFrame(results)
+            # 정렬
+            sig_map = {'💎':0, '🔥':1, '✅':2, '⚠️':3, '🚨':4, '📉':5, '관':6}
+            res_df['sort'] = res_df['신호'].apply(lambda x: sig_map.get(x[0], 9))
+            res_df = res_df.sort_values('sort')
+
+            cur = "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}"
+            fmt = {"현재가": cur, "목표가": cur, "피보나치(0.618)": cur, "RSI": "{:.1f}"}
+            def color_sig(val):
+                if '💎' in val: return 'color: purple; font-weight: bold; background-color: #f0f0f5'
+                if '🔥' in val: return 'color: red; font-weight: bold'
+                if '✅' in val: return 'color: orange; font-weight: bold'
+                if '🚨' in val: return 'color: blue; font-weight: bold'
+                if '📉' in val: return 'color: skyblue; font-weight: bold'
+                if '⚠️' in val: return 'color: gray'
+                return ''
+
+            cols = ["티커", "종목명", "신호", "현재가", "손절가", "목표가", "피보나치(0.618)", "RSI", "추세"]
+            st.dataframe(res_df[cols].style.format(fmt).map(color_sig, subset=['신호']), use_container_width=True, hide_index=True)
+
+        if errors: st.warning("⚠️ 실패 목록"); st.dataframe(pd.DataFrame(errors))
+
+# --- 6. 관심종목 (유지) ---
+st.sidebar.divider()
+st.sidebar.subheader("❤️ 관심종목 관리")
+with st.sidebar.expander("목록 편집"):
+    new_t = st.text_input("추가", placeholder="예: 005930").upper()
+    if st.button("➕ 저장"):
+        if new_t and new_t not in st.session_state.watchlist:
+            new_l = st.session_state.watchlist + [new_t]
+            if save_watchlist(new_l): st.session_state.watchlist = new_l; st.rerun()
+    for t in st.session_state.watchlist:
+        c1, c2 = st.columns([0.8, 0.2])
+        c1.text(f"- {t}")
+        if c2.button("X", key=f"d_{t}"):
+            new_l = [x for x in st.session_state.watchlist if x != t]
+            if save_watchlist(new_l): st.session_state.watchlist = new_l; st.rerun()
