@@ -7,17 +7,18 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v14.0", layout="wide")
-st.title("⚡ AI 퀀트 종목 발굴기 (v14.0 24/7 Live)")
+st.set_page_config(page_title="Quant Screener v14.1", layout="wide")
+st.title("⚡ AI 퀀트 종목 발굴기 (v14.1 Input Error Fix)")
 
-with st.expander("📘 v14.0 업데이트: 24시간 실시간 데이터 강제 적용"):
+with st.expander("📘 v14.1 업데이트: MultiIndex 에러 완벽 해결"):
     st.markdown('''
-    **완벽한 실시간 반영 원리:**
-    1.  **이원화 수집:** '과거 흐름(일봉)'과 '현재 가격(1분봉, 장외포함)'을 따로 수집합니다.
-    2.  **틱 주입(Tick Injection):** 일봉 차트의 맨 마지막 가격을 **가장 최근 체결가(프리/애프터마켓 포함)**로 강제 교체합니다.
-    3.  **지표 재계산:** 변경된 가격을 기준으로 RSI, 볼린저밴드 등을 다시 계산하므로, **장외 급등락이 분석 결과에 즉시 반영**됩니다.
+    **문제 해결:**
+    * 티커를 직접 입력할 때 발생하던 `Can only use .str accessor with Index` 에러를 수정했습니다.
+    * 데이터가 다중 컬럼(MultiIndex)으로 들어오더라도, **자동으로 감지하여 단일 컬럼(Flat Index)으로 변환**합니다.
     
-    **검증:** 결과표의 `🕒 체결시간`을 확인하세요. 현재 시간(또는 장 마감 직후 시간)이라면 정상 작동 중입니다.
+    **기존 기능 유지:**
+    * **24시간 실시간 데이터:** 장외 거래(프리/애프터) 가격을 강제 주입하여 분석.
+    * **속도 최적화:** 배치 다운로드로 빠른 속도 유지.
     ''')
 
 # --- 1. 유틸리티 함수 ---
@@ -144,10 +145,11 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 4. 분석 로직 (v14.0 24/7 Tick Injection) ---
+# --- 4. 분석 로직 (v14.1 Updated) ---
 def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs):
     try:
-        # [중요] 틱 주입 후 지표 계산
+        # [핵심] 24/7 Tick Injection 완료된 df 사용
+        # 지표 계산
         df.ta.sma(length=20, append=True)
         df.ta.sma(length=60, append=True)
         df.ta.sma(length=120, append=True)
@@ -265,11 +267,12 @@ def analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market, **kwargs)
         }
     except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
 
-# --- 5. 실행 루프 (Tick Injection Logic) ---
+# --- 5. 실행 루프 ---
 if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
     
+    # 스마트 티커 처리
     for t in tickers_raw:
         if market_choice == '한국 증시 (Korea)':
             if t.endswith('.KS') or t.endswith('.KQ'): tickers.append(t)
@@ -284,10 +287,10 @@ if run_analysis_button:
         status_text.text("데이터 다운로드 중... (Batch)")
         
         try:
-            # 1. 일봉 데이터 (History)
+            # 1. 일봉 (Daily)
             batch_data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
             
-            # 2. 실시간 데이터 (Last Tick) - 최근 5일치 1분봉(Pre/Post 포함)
+            # 2. 실시간 (Real-time Last Tick)
             batch_rt = yf.download(tickers, period="5d", interval="1m", prepost=True, group_by='ticker', progress=False)
             
             bar = st.progress(0, "분석 시작...")
@@ -297,7 +300,7 @@ if run_analysis_button:
                 bar.progress((i+1)/len(tickers))
                 
                 try:
-                    # Data A: Daily
+                    # [Fix 1] Daily Data Extraction & Flattening
                     if len(tickers) == 1: df = batch_data.copy()
                     else:
                         try: df = batch_data[ticker].copy()
@@ -312,42 +315,46 @@ if run_analysis_button:
                         errors.append({"티커": ticker, "신호": "데이터 없음"})
                         continue
                     
+                    # MultiIndex Check (Daily)
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(-1)
                     df.columns = df.columns.str.lower()
+                    
                     rt_date_str = "정규장 종가"
 
-                    # Data B: Real-time (Tick Injection)
+                    # [Fix 2] Real-time Data Extraction & Flattening
                     try:
-                        if len(tickers) == 1: df_rt = batch_rt
-                        else: df_rt = batch_rt[ticker]
+                        if len(tickers) == 1: df_rt = batch_rt.copy()
+                        else: df_rt = batch_rt[ticker].copy()
+                        
+                        # MultiIndex Check (Real-time)
+                        if isinstance(df_rt.columns, pd.MultiIndex):
+                            df_rt.columns = df_rt.columns.get_level_values(-1)
                         
                         if not df_rt.empty:
-                            # 1분봉의 맨 마지막 줄 = '세상에서 가장 최근에 체결된 가격'
                             last_tick = df_rt.iloc[-1]
                             rt_price = last_tick['Close']
-                            rt_time = last_tick.name # Timestamp
-                            
-                            # 날짜 문자열 (검증용)
+                            rt_time = last_tick.name 
                             rt_date_str = rt_time.strftime("%m-%d %H:%M")
                             
                             last_date_daily = df.index[-1].date()
                             rt_date_only = rt_time.date()
                             
-                            # [핵심] 일봉 데이터의 '오늘' 또는 '마지막 날' 데이터를 '실시간 가격'으로 덮어씀
-                            # 이렇게 해야 RSI나 MA가 이 가격 기준으로 다시 계산됨
+                            # Tick Injection (24/7 Cover)
                             if rt_date_only > last_date_daily:
-                                # 새로운 날짜면 행 추가 (장 시작 전/후)
                                 new_row = pd.DataFrame(
                                     {'open': rt_price, 'high': rt_price, 'low': rt_price, 'close': rt_price, 'volume': 0},
                                     index=[pd.Timestamp(rt_date_only)]
                                 )
                                 df = pd.concat([df, new_row])
+                                rt_date_str += " (장전/시작)"
                             else:
-                                # 같은 날짜면 종가 업데이트 (장 중)
                                 df.iloc[-1, df.columns.get_loc('close')] = rt_price
+                                rt_date_str += " (실시간)"
                                 
                     except Exception as e: pass
 
-                    # 분석 실행 (수정된 df 사용)
+                    # 분석 실행
                     res = analyze_dataframe(ticker, df, rt_date_str, stop_loss_mode, market_choice, atr_multiplier=atr_multiplier, stop_loss_pct=stop_loss_pct)
                     res["종목명"] = get_stock_name(ticker)
                     
@@ -369,6 +376,7 @@ if run_analysis_button:
 
                 cur = "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}"
                 fmt = {"현재가": cur, "목표가": cur, "피보나치(0.618)": cur, "RSI": "{:.1f}"}
+                
                 def color_sig(val):
                     if '💎' in val: return 'color: purple; font-weight: bold; background-color: #f0f0f5'
                     if '🔥' in val: return 'color: red; font-weight: bold'
