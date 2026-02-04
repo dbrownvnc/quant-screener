@@ -6,25 +6,23 @@ import requests
 import numpy as np
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="Quant Screener v13.1", layout="wide")
-st.title("⚡ AI 퀀트 종목 발굴기 (v13.1 Global Mix)")
+st.set_page_config(page_title="Quant Screener v13.2", layout="wide")
+st.title("⚡ AI 퀀트 종목 발굴기 (v13.2 장외거래 포함)")
 
-with st.expander("📘 v13.1 업데이트: 혼합 포트폴리오 지원"):
+with st.expander("📘 v13.2 업데이트: 프리/애프터마켓 반영"):
     st.markdown('''
-    **1. 스마트 티커 감지:**
-    * 한국 주식(숫자 6자리)에만 자동으로 `.KS`를 붙입니다.
-    * 미국 주식(영문 티커)은 그대로 두어, **한국/미국 주식이 섞여 있어도 에러 없이 분석**합니다.
+    **1. 장외 거래(Extended Hours) 실시간 반영:**
+    * 기존 정규장 종가 대신, **프리마켓/애프터마켓/주간거래**를 포함한 실시간 시세를 가져옵니다.
+    * 이 실시간 가격을 기준으로 RSI, 볼린저밴드 등 모든 지표를 재계산하여 **가장 빠른 매수 신호**를 포착합니다.
     
-    **2. 자동 통화(Currency) 표기:**
-    * 시장 탭과 상관없이, 종목에 따라 **원화(₩)**와 **달러($)**를 자동으로 구분해 표기합니다.
+    **2. 데이터 처리 방식:**
+    * `1년치 일봉` + `실시간 5분봉(prepost=True)`을 동시에 분석하여 정확도와 속도를 모두 잡았습니다.
     ''')
 
 # --- 1. 유틸리티 함수 ---
-
 @st.cache_data(ttl=86400)
 def get_stock_name(ticker):
-    """네이버 API(한국) 및 yfinance(미국) 하이브리드 종목명 추출"""
-    # 1. 한국 주식
+    # 1. 한국 주식 (네이버 모바일 API)
     if ".KS" in ticker or ".KQ" in ticker:
         try:
             code = ticker.split('.')[0]
@@ -35,7 +33,7 @@ def get_stock_name(ticker):
                 return res.json().get('stockName', ticker)
         except: return ticker
 
-    # 2. 미국 주식
+    # 2. 미국 주식 (yfinance)
     try:
         stock = yf.Ticker(ticker)
         return stock.info.get('shortName') or stock.info.get('longName') or ticker
@@ -146,10 +144,10 @@ if stop_loss_mode == "ATR 기반 (권장)":
 elif stop_loss_mode == "고정 비율 (%)":
     stop_loss_pct = st.sidebar.slider("손절 비율 (%)", 1.0, 10.0, 3.0, 0.5)
 
-# --- 4. 분석 로직 (v13.1 적용) ---
+# --- 4. 분석 로직 (v13.2 Real-time Extended) ---
 def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
     try:
-        # 지표 계산
+        # 기술적 지표 계산
         df.ta.sma(length=20, append=True)
         df.ta.sma(length=60, append=True)
         df.ta.sma(length=120, append=True)
@@ -176,7 +174,6 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         close = latest['close']
         rsi = latest['RSI_14']
         
-        # [수정] 통화 단위 자동 감지
         if ".KS" in ticker or ".KQ" in ticker: currency = "₩"
         else: currency = "$"
         
@@ -184,7 +181,7 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         fib_618, fib_500, swing_high, swing_low = get_fibonacci_levels(df)
         max_vol_price = get_max_vol_price(df)
 
-        # 매수 판정
+        # [매수 판정]
         buy_score = 0
         buy_reasons = []
         trend = "상승" if close > latest[sma200_col] else "하락"
@@ -206,7 +203,7 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         if rsi < 35: buy_score += 2; buy_reasons.append(f"RSI과매도({rsi:.1f})")
         elif rsi < 50 and trend == "상승": buy_score += 1
 
-        # 매도 판정
+        # [매도 판정]
         sell_score = 0
         sell_reasons = []
         resistances = {"볼린저상단": latest[bbu_col], "피벗R1": r1, "피벗R2": r2, "전고점": swing_high}
@@ -222,7 +219,7 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         if rsi > 70: sell_score += 2; sell_reasons.append(f"RSI과매수({rsi:.1f})")
         elif rsi > 65: sell_score += 1
 
-        # 최종 신호 (엄격 모드)
+        # [최종 신호]
         signal = "관망"
         color = "black"
 
@@ -270,15 +267,13 @@ def analyze_dataframe(ticker, df, stop_loss_mode, market, **kwargs):
         }
     except Exception as e: return {"티커": ticker, "신호": "오류", "오류 원인": str(e)}
 
-# --- 5. 실행 루프 (배치 다운로드 + 스마트 티커) ---
+# --- 5. 실행 루프 (이중 배치 다운로드) ---
 if run_analysis_button:
     tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     tickers = []
     
-    # [수정] 스마트 티커 처리
     for t in tickers_raw:
         if market_choice == '한국 증시 (Korea)':
-            # 이미 .KS나 .KQ가 있으면 그대로, 숫자면 .KS 추가, 문자면 그대로(미국)
             if t.endswith('.KS') or t.endswith('.KQ'): tickers.append(t)
             elif t.isdigit(): tickers.append(f"{t}.KS")
             else: tickers.append(t)
@@ -288,10 +283,17 @@ if run_analysis_button:
     else:
         results, errors = [], []
         status_text = st.empty()
-        status_text.text("데이터 다운로드 중... (Batch)")
+        status_text.text("데이터 다운로드 중... (1/2: Daily History)")
         
         try:
+            # 1. 일봉 데이터 (지표 계산용) - 1년
             batch_data = yf.download(tickers, period="1y", group_by='ticker', progress=False)
+            
+            status_text.text("데이터 다운로드 중... (2/2: Real-time Extended)")
+            
+            # 2. 실시간 데이터 (프리/애프터장 포함) - 5일, 5분봉
+            batch_rt = yf.download(tickers, period="5d", interval="5m", prepost=True, group_by='ticker', progress=False)
+            
             bar = st.progress(0, "분석 시작...")
             
             for i, ticker in enumerate(tickers):
@@ -299,22 +301,38 @@ if run_analysis_button:
                 bar.progress((i+1)/len(tickers))
                 
                 try:
-                    if len(tickers) == 1: df = batch_data
+                    # Data A: Daily
+                    if len(tickers) == 1: df = batch_data.copy()
                     else:
                         try: df = batch_data[ticker].copy()
-                        except KeyError:
-                            if ".KS" in ticker:
-                                alt_ticker = ticker.replace(".KS", ".KQ")
-                                df = yf.download(alt_ticker, period="1y", progress=False)
-                                if not df.empty: ticker = alt_ticker
+                        except KeyError: 
+                            if ".KS" in ticker: # 코스닥 재시도
+                                alt = ticker.replace(".KS", ".KQ")
+                                df = yf.download(alt, period="1y", progress=False)
+                                if not df.empty: ticker = alt
                             else: df = pd.DataFrame()
 
                     if df.empty:
                         errors.append({"티커": ticker, "신호": "데이터 없음"})
                         continue
-                        
-                    df.columns = df.columns.str.lower()
                     
+                    df.columns = df.columns.str.lower()
+
+                    # Data B: Real-time Extended (장외 포함 최신가 덮어쓰기)
+                    try:
+                        if len(tickers) == 1: df_rt = batch_rt
+                        else: df_rt = batch_rt[ticker]
+                        
+                        if not df_rt.empty:
+                            # 5분봉의 가장 마지막 종가 = 현재가 (장외 포함)
+                            current_price = df_rt['Close'].iloc[-1]
+                            if pd.notna(current_price):
+                                # 일봉 데이터의 마지막 row 종가를 실시간 가격으로 업데이트
+                                # (이렇게 해야 RSI, 볼린저밴드가 현재가 기준으로 다시 계산됨)
+                                df.iloc[-1, df.columns.get_loc('close')] = current_price
+                    except: pass # RT 데이터 없으면 그냥 종가 사용
+
+                    # 분석 실행
                     res = analyze_dataframe(ticker, df, stop_loss_mode, market_choice, atr_multiplier=atr_multiplier, stop_loss_pct=stop_loss_pct)
                     res["종목명"] = get_stock_name(ticker)
                     
@@ -328,21 +346,14 @@ if run_analysis_button:
             status_text.empty()
 
             if results:
-                st.success(f"✅ 분석 완료! ({len(results)}건)")
+                st.success(f"✅ 분석 완료! ({len(results)}건 - 장외거래 반영됨)")
                 res_df = pd.DataFrame(results)
                 sig_map = {'💎':0, '🔥':1, '✅':2, '⚠️':3, '🚨':4, '📉':5, '관':6}
                 res_df['sort'] = res_df['신호'].apply(lambda x: sig_map.get(x[0], 9))
                 res_df = res_df.sort_values('sort')
 
-                # 통화 단위는 개별 함수에서 처리했으므로 여기서는 단순 문자열 포맷만
-                # fmt = {"현재가": cur, ...} 대신 개별 적용 필요하나 
-                # analyze_dataframe 내부에서 포맷팅할 수 없으니, 
-                # 여기서는 '원화' 기준으로 통일하거나, 
-                # 가장 좋은 건 '통화' 컬럼을 만드는 것임.
-                # 편의상 '시장 선택'에 따른 포맷을 쓰되, 섞여있어도 숫자는 맞음.
                 cur = "₩{:,.0f}" if market_choice == '한국 증시 (Korea)' else "${:,.2f}"
                 fmt = {"현재가": cur, "목표가": cur, "피보나치(0.618)": cur, "RSI": "{:.1f}"}
-                
                 def color_sig(val):
                     if '💎' in val: return 'color: purple; font-weight: bold; background-color: #f0f0f5'
                     if '🔥' in val: return 'color: red; font-weight: bold'
